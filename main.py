@@ -390,8 +390,8 @@ def _pip_install(packages: list) -> bool:
         return False
 
 
-def _migrate_old_jarvis_folders():
-    """Move ~/.jarvis and ~/.jarvis_profiles to their Habibi names once, so
+def _migrate_old_folders():
+    """Move the old data folders to their Habibi names once, so
     reminders and browser sign-ins survive the rename."""
     home = Path.home()
     for old, new in ((".jarvis", ".habibi"), (".jarvis_profiles", ".habibi_profiles")):
@@ -409,7 +409,7 @@ def _migrate_old_jarvis_folders():
         pass
 
 
-_migrate_old_jarvis_folders()
+_migrate_old_folders()
 
 
 class HabibiLive:

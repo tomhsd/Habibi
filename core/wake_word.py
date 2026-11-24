@@ -1,5 +1,5 @@
 """
-Local wake-word detection for HABIBI ("Hey Jarvis").
+Local wake-word detection for HABIBI.
 
 Design goals:
   • ZERO cost when the feature is off — openwakeword is imported ONLY inside
@@ -13,7 +13,7 @@ Design goals:
     network call except the one-time model download the user triggers from the UI.
 
 openwakeword ships small ONNX models (a few MB each) and runs comfortably on a
-CPU. The pretrained wake phrase used here is "Hey Jarvis".
+CPU. A custom "Hey Habibi" model can be dropped in (see below).
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from typing import Callable
 
 # Wake model. If you train your own "Hey Habibi" model with openWakeWord and put
 # it at config/hey_habibi.onnx, it is used automatically. Otherwise the
-# pretrained "Hey Jarvis" model is used (no ready-made "Hey Habibi" model exists).
+# built-in pretrained openWakeWord model is used.
 _CUSTOM_MODEL = Path(__file__).resolve().parent.parent / "config" / "hey_habibi.onnx"
 _BUILTIN_MODEL = "hey_jarvis"
 if _CUSTOM_MODEL.is_file():
@@ -91,6 +91,11 @@ def install_and_download(logger: Callable[[str], None] = print) -> tuple[bool, s
                 capture_output=True, text=True,
             )
             if r.returncode != 0:
+                if sys.version_info >= (3, 14):
+                    v = f"{sys.version_info.major}.{sys.version_info.minor}"
+                    return False, (f"the wake word engine (onnxruntime) does not support Python {v} yet. "
+                                   "Run Habibi with Python 3.12, or install HabibiSetup.exe, "
+                                   "which already includes the wake word.")
                 tail = (r.stderr or r.stdout or "").strip().splitlines()[-1:] or [""]
                 return False, f"pip install failed: {tail[0][:160]}"
         # Download the pretrained melspectrogram/embedding + wake models.

@@ -479,7 +479,7 @@
 
     function append(speaker, text) {
       const d = document.createElement('div');
-      if (speaker === 'habibi' || speaker === 'jarvis' || speaker === 'ai') {
+      if (speaker === 'habibi' || speaker === 'ai') {
         d.className = 'msg msg-j';
         d.innerHTML = `<div class="lbl">${esc(ASSISTANT)}</div>${esc(text)}`;
         core.speakUntil = performance.now() + Math.min(9000, 1200 + text.length * 55);
