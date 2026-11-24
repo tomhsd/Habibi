@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>3D Cube Gestures</title>
+    <style>
+        body { margin: 0; background-color: #000; overflow: hidden; }
+        #cube-container { width: 200px; height: 200px; position: absolute; top: 50%; left: 50%; transform-style: preserve-3d; transform: translate(-50%, -50%) rotateX(-30deg) rotateY(45deg); }
+        .cube-face { width: 200px; height: 200px; position: absolute; opacity: 0.8; border: 2px solid white; }
+        .front { transform: translateZ(100px); background: red; }
+        .back { transform: rotateY(180deg) translateZ(100px); background: green; }
+        .right { transform: rotateY(90deg) translateZ(100px); background: blue; }
+        .left { transform: rotateY(-90deg) translateZ(100px); background: yellow; }
+        .top { transform: rotateX(90deg) translateZ(100px); background: magenta; }
+        .bottom { transform: rotateX(-90deg) translateZ(100px); background: cyan; }
+    </style>
+</head>
+<body>
+    <div id="cube-container">
+        <div class="cube-face front"></div>
+        <div class="cube-face back"></div>
+        <div class="cube-face right"></div>
+        <div class="cube-face left"></div>
+        <div class="cube-face top"></div>
+        <div class="cube-face bottom"></div>
+    </div>
+    <script>
+        document.addEventListener('mousemove', (e) => {
+            const rx = (e.clientY / window.innerHeight - 0.5) * 360;
+            const ry = (e.clientX / window.innerWidth - 0.5) * 360;
+            document.getElementById('cube-container').style.transform = `translate(-50%, -50%) rotateX(${rx}deg) rotateY(${ry}deg)`;
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#00060a">
+  <title>__NAME__ · Remote</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --pri:      __ACCENT__;
+      --bg:       #00060a;
+      --card:     color-mix(in srgb, var(--pri) 6%,  #00080c);
+      --border:   color-mix(in srgb, var(--pri) 26%, #000608);
+      --border-b: color-mix(in srgb, var(--pri) 50%, #000608);
+      --pri-gho:  color-mix(in srgb, var(--pri) 14%, #000000);
+      --text:     color-mix(in srgb, var(--pri) 45%, #d8ffff);
+      --text-dim: color-mix(in srgb, var(--pri) 45%, #2a4a50);
+      --white:    #d8f8ff;
+      --acc2:     #ffcc00;
+      --red:      #ff3355;
+      --mono: Consolas, 'Cascadia Mono', 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Roboto Mono', monospace;
+    }
+    html, body {
+      height: 100%; background: var(--bg); color: var(--text); font-family: var(--mono);
+      display: flex; align-items: center; justify-content: center; padding: 16px;
+    }
+    body::before {
+      content: ''; position: fixed; inset: 0; pointer-events: none;
+      background-image:
+        linear-gradient(color-mix(in srgb, var(--pri) 5%, transparent) 1px, transparent 1px),
+        linear-gradient(90deg, color-mix(in srgb, var(--pri) 5%, transparent) 1px, transparent 1px);
+      background-size: 28px 28px;
+    }
+    .card {
+      position: relative; width: 100%; max-width: 360px; padding: 30px 26px 24px;
+      background: var(--card); border: 1px solid var(--border); text-align: center;
+      clip-path: polygon(16px 0, 100% 0, 100% calc(100% - 16px), calc(100% - 16px) 100%, 0 100%, 0 16px);
+      box-shadow: 0 0 40px color-mix(in srgb, var(--pri) 10%, transparent);
+    }
+    .ring { width: 96px; height: 96px; margin: 0 auto 14px; display: block; }
+    .logo {
+      font-size: 24px; font-weight: 700; letter-spacing: 8px; color: var(--white);
+      text-shadow: 0 0 14px color-mix(in srgb, var(--pri) 60%, transparent); margin-bottom: 4px;
+    }
+    .sub { font-size: 10px; color: var(--pri); letter-spacing: 4px; margin-bottom: 16px; }
+    .hint { font-size: 11px; color: var(--text-dim); line-height: 1.6; margin-bottom: 20px; }
+    .hint strong { color: var(--white); }
+    .key-input {
+      width: 100%; padding: 16px 10px; background: var(--bg);
+      border: 1px solid var(--border-b); color: var(--white);
+      font-size: 28px; font-weight: 700; font-family: var(--mono);
+      text-align: center; letter-spacing: 10px; text-transform: uppercase; outline: none;
+      transition: border-color .15s, box-shadow .15s; caret-color: var(--pri); margin-bottom: 12px;
+    }
+    .key-input::placeholder { color: var(--text-dim); letter-spacing: 6px; font-size: 20px; }
+    .key-input:focus { border-color: var(--pri); box-shadow: 0 0 0 1px var(--pri), 0 0 18px color-mix(in srgb, var(--pri) 30%, transparent); }
+    .err { font-size: 11px; color: var(--red); min-height: 16px; margin-bottom: 10px; letter-spacing: 1px; }
+    .btn {
+      width: 100%; padding: 14px; background: var(--pri); color: var(--bg);
+      font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: 4px;
+      border: none; cursor: pointer; transition: opacity .15s, transform .1s;
+      clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+    }
+    .btn:active { transform: scale(.98); }
+    @keyframes shake { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-7px)} 40%,80%{transform:translateX(7px)} }
+    .shake { animation: shake .35s ease; }
+    .voice-note {
+      font-size: 10px; color: var(--text-dim); margin-top: 18px; line-height: 1.6; text-align: left;
+      border-left: 2px solid var(--border-b); padding-left: 10px;
+    }
+    .voice-note code { color: var(--white); background: var(--pri-gho); padding: 1px 4px; }
+    #reconnecting { display: none; color: var(--acc2); font-size: 11px; letter-spacing: 2px; margin-bottom: 14px; }
+  </style>
+</head>
+<body>
+  <div class="card" id="card">
+    <svg class="ring" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="46" fill="none" stroke="var(--pri)" stroke-opacity=".35" stroke-width="1" stroke-dasharray="2 4"/>
+      <g style="transform-origin:50px 50px;animation:spin 6s linear infinite">
+        <circle cx="50" cy="50" r="40" fill="none" stroke="var(--pri)" stroke-width="3" stroke-dasharray="40 22"/>
+      </g>
+      <g style="transform-origin:50px 50px;animation:spin 9s linear infinite reverse">
+        <circle cx="50" cy="50" r="33" fill="none" stroke="var(--pri)" stroke-opacity=".6" stroke-width="1.5" stroke-dasharray="14 10"/>
+      </g>
+      <circle cx="50" cy="50" r="24" fill="var(--bg)" stroke="var(--pri)" stroke-width="1.5"/>
+      <circle cx="50" cy="50" r="10" fill="var(--pri)" opacity=".85">
+        <animate attributeName="opacity" values=".45;.95;.45" dur="2.4s" repeatCount="indefinite"/>
+      </circle>
+      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+    </svg>
+    <div class="logo">__NAME_UPPER__</div>
+    <div class="sub">◉ REMOTE ACCESS</div>
+    <p id="reconnecting">RECONNECTING…</p>
+    <p class="hint">Press <strong>REMOTE CONTROL</strong> in the __NAME__ desktop app to get a QR code or session key.</p>
+    <input class="key-input" id="key" type="text" maxlength="6"
+           autocomplete="off" autocorrect="off" spellcheck="false" placeholder="· · · · · ·">
+    <div class="err" id="err"></div>
+    <button class="btn" onclick="doLogin()">CONNECT ▸</button>
+    <p class="voice-note">
+      🎤 <strong style="color:var(--white)">Voice commands:</strong> open
+      <code>chrome://flags</code> on your phone, search
+      <code>Insecure origins treated as secure</code>, add your __NAME__ URL, tap Relaunch.
+    </p>
+  </div>
+
+  <script>
+    (async function() {
+      const devTok = localStorage.getItem('habibi_device_token');
+      if (!devTok) return;
+      document.getElementById('reconnecting').style.display = 'block';
+      try {
+        const r = await fetch('/api/device-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_token: devTok }),
+        });
+        const d = await r.json();
+        if (d.ok && d.token) {
+          sessionStorage.setItem('habibi_key', d.key);
+          sessionStorage.setItem('habibi_token', d.token);
+          location.replace('/');
+          return;
+        }
+      } catch (_) {}
+      localStorage.removeItem('habibi_device_token');
+      document.getElementById('reconnecting').style.display = 'none';
+    })();
+
+    const inp = document.getElementById('key');
+    inp.focus();
+    inp.addEventListener('input', () => {
+      inp.value = inp.value.toUpperCase().replace(/[^A-Z2-9]/g, '');
+      if (inp.value.length === 6) doLogin();
+    });
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+    async function doLogin() {
+      const key = inp.value.trim();
+      if (key.length < 6) { shake(); return; }
+      let data;
+      try {
+        const r = await fetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin: key })
+        });
+        data = await r.json();
+      } catch (e) {
+        document.getElementById('err').textContent = 'CONNECTION ERROR';
+        shake(); return;
+      }
+      if (data.ok && data.token) {
+        sessionStorage.setItem('habibi_key', key);
+        sessionStorage.setItem('habibi_token', data.token);
+        location.href = '/';
+      } else {
+        inp.value = '';
+        inp.focus();
+        document.getElementById('err').textContent = 'INVALID OR EXPIRED KEY';
+        shake();
+      }
+    }
+    function shake() {
+      const c = document.getElementById('card');
+      c.classList.remove('shake'); void c.offsetWidth; c.classList.add('shake');
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="habibi_bg">#00060A</color>
+    <style name="Theme.Habibi" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/habibi_bg</item>
+        <item name="android:statusBarColor">@color/habibi_bg</item>
+        <item name="android:navigationBarColor">@color/habibi_bg</item>
+        <item name="android:colorAccent">#00D4FF</item>
+    </style>
+</resources>

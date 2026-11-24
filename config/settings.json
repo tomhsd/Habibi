@@ -1,0 +1,7 @@
+{
+  "theme": "cyan",
+  "lang": "en",
+  "wake_word": true,
+  "global_hotkey": "ctrl+alt+j",
+  "minimize_to_tray": true
+}

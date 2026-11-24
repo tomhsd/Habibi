@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#00060a">
+  <title>__NAME__ · Remote</title>
+  <script src="/static/crypto.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      /* Same palette as the Windows HUD (ui.py class C). --pri follows the
+         accent colour chosen in the desktop app. */
+      --pri:      __ACCENT__;
+      --bg:       #00060a;
+      --panel:    color-mix(in srgb, var(--pri) 4%,  #000b10);
+      --card:     color-mix(in srgb, var(--pri) 7%,  #00080c);
+      --border:   color-mix(in srgb, var(--pri) 26%, #000608);
+      --border-b: color-mix(in srgb, var(--pri) 50%, #000608);
+      --pri-dim:  color-mix(in srgb, var(--pri) 58%, #000000);
+      --pri-gho:  color-mix(in srgb, var(--pri) 14%, #000000);
+      --text:     color-mix(in srgb, var(--pri) 45%, #d8ffff);
+      --text-dim: color-mix(in srgb, var(--pri) 45%, #2a4a50);
+      --white:    #d8f8ff;
+      --acc:      #ff6b00;
+      --acc2:     #ffcc00;
+      --green:    #00ff88;
+      --red:      #ff3355;
+      --mono: Consolas, 'Cascadia Mono', 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Roboto Mono', monospace;
+    }
+    html, body {
+      height: 100%; background: var(--bg); color: var(--text);
+      font-family: var(--mono);
+      display: flex; flex-direction: column; overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body::before {           /* faint HUD grid, like the desktop background */
+      content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      background-image:
+        linear-gradient(color-mix(in srgb, var(--pri) 5%, transparent) 1px, transparent 1px),
+        linear-gradient(90deg, color-mix(in srgb, var(--pri) 5%, transparent) 1px, transparent 1px);
+      background-size: 28px 28px;
+    }
+    body::after {            /* slow scan line sweeping the HUD */
+      content: ''; position: fixed; left: 0; right: 0; height: 120px; top: -120px; pointer-events: none; z-index: 2;
+      background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--pri) 7%, transparent) 60%, color-mix(in srgb, var(--pri) 16%, transparent) 98%, transparent);
+      animation: scan 7s linear infinite;
+    }
+    @keyframes scan { to { transform: translateY(calc(100vh + 120px)); } }
+    header, .core-wrap, #wave, main, footer { position: relative; z-index: 1; }
+
+    /* ── HEADER ── */
+    header {
+      flex-shrink: 0; display: flex; align-items: center; gap: 10px;
+      padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, var(--panel), rgba(0,6,10,0.92));
+    }
+    .logo {
+      font-size: 15px; font-weight: 700; letter-spacing: 5px; color: var(--white);
+      text-shadow: 0 0 10px color-mix(in srgb, var(--pri) 60%, transparent);
+    }
+    .logo { animation: logoGlow 3.2s ease-in-out infinite; }
+    @keyframes logoGlow {
+      0%,100% { text-shadow: 0 0 8px color-mix(in srgb, var(--pri) 45%, transparent); }
+      50%     { text-shadow: 0 0 18px var(--pri), 0 0 34px color-mix(in srgb, var(--pri) 45%, transparent); }
+    }
+    .logo small { display: block; font-size: 8px; letter-spacing: 3px; color: var(--text-dim); font-weight: 400; margin-top: 2px; }
+    .spacer { flex: 1; }
+    .tag {
+      display: flex; align-items: center; gap: 6px; padding: 4px 9px;
+      border: 1px solid var(--border); background: var(--card);
+      font-size: 9px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+      color: var(--text-dim); clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+      transition: all .3s;
+    }
+    .tag .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); }
+    .tag.on  { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+    .tag.on .dot { background: var(--green); box-shadow: 0 0 6px var(--green); animation: blink 2s infinite; }
+    .tag.sleep { color: var(--acc2); border-color: color-mix(in srgb, var(--acc2) 40%, transparent); }
+    .tag.sleep .dot { background: var(--acc2); }
+    .tag.enc-off { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
+    .tag.enc-on  { color: var(--pri); border-color: var(--border-b); }
+    .tag.on, .tag.enc-on { box-shadow: 0 0 10px color-mix(in srgb, currentColor 30%, transparent); }
+    #setupBtn { padding: 5px 9px; font-size: 13px; display: none; }
+    #wave {
+      display: block; width: 100%; height: 44px; flex-shrink: 0;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, transparent, var(--pri-gho), transparent);
+    }
+    .core-wrap.mini + #wave { height: 26px; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+    /* ── REACTOR CORE ── */
+    .core-wrap {
+      flex-shrink: 0; display: flex; align-items: center; justify-content: center; gap: 14px;
+      padding: 10px 14px 8px; border-bottom: 1px solid var(--border);
+      background: radial-gradient(ellipse at center, var(--pri-gho) 0%, transparent 70%);
+    }
+    #core { width: 150px; height: 150px; display: block; }
+    .core-side { display: flex; flex-direction: column; gap: 6px; font-size: 9px; letter-spacing: 1.5px; color: var(--text-dim); min-width: 78px; }
+    .core-side.r { text-align: right; }
+    .core-side b { display: block; color: var(--text); font-size: 11px; letter-spacing: 1px; font-weight: 700; }
+    .core-wrap.mini #core { width: 84px; height: 84px; }
+    .core-wrap.mini .core-side { display: none; }
+
+    /* ── LOG FEED ── */
+    main {
+      flex: 1; overflow-y: auto; padding: 12px 14px 8px;
+      display: flex; flex-direction: column; gap: 8px;
+      background: color-mix(in srgb, var(--panel) 80%, transparent);
+    }
+    main::-webkit-scrollbar { width: 3px; }
+    main::-webkit-scrollbar-thumb { background: var(--border-b); }
+    .feed-title {
+      font-size: 9px; letter-spacing: 3px; color: var(--text-dim); padding-bottom: 6px;
+      border-bottom: 1px dashed var(--border); margin-bottom: 2px;
+    }
+    .msg {
+      max-width: 92%; padding: 8px 11px; font-size: 13px; line-height: 1.55;
+      border-left: 2px solid var(--pri); background: var(--card);
+      animation: pop .18s ease; word-wrap: break-word; white-space: pre-wrap;
+    }
+    @keyframes pop { from { opacity: 0; transform: translateY(4px); } }
+    .msg-j { align-self: flex-start; color: var(--pri); border-left-color: var(--pri);
+             box-shadow: inset 0 0 18px color-mix(in srgb, var(--pri) 7%, transparent); }
+    .msg-u { align-self: flex-end; color: var(--white); border-left: none; border-right: 2px solid var(--white);
+             background: color-mix(in srgb, var(--white) 5%, transparent); text-align: left; }
+    .msg-sys { align-self: stretch; max-width: none; font-size: 11px; color: var(--acc2);
+               background: transparent; border-left: 2px solid color-mix(in srgb, var(--acc2) 45%, transparent); padding: 3px 9px; }
+    .msg-sys.err { color: var(--red); border-left-color: var(--red); }
+    .lbl { font-size: 9px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; opacity: .6; margin-bottom: 3px; }
+    .msg-u .lbl { text-align: right; }
+
+    /* ── FILE CARD ── */
+    .msg-file {
+      align-self: flex-end; background: var(--card); border: 1px solid var(--border);
+      border-right: 2px solid var(--green);
+      padding: 10px 12px; display: flex; align-items: center; gap: 12px;
+      max-width: 92%; animation: pop .18s ease;
+    }
+    .fc-icon { font-size: 24px; flex-shrink: 0; }
+    .fc-meta { flex: 1; min-width: 0; }
+    .fc-lbl  { font-size: 9px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--green); opacity: .8; margin-bottom: 3px; }
+    .fc-name { font-size: 12px; font-weight: 700; color: var(--white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .fc-size { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+    .fc-bar-wrap { height: 3px; background: var(--border); margin-top: 7px; overflow: hidden; }
+    .fc-bar { height: 100%; width: 0%; background: var(--pri); box-shadow: 0 0 6px var(--pri); transition: width .12s linear; }
+    .fc-status { font-size: 10px; font-weight: 700; letter-spacing: 1px; flex-shrink: 0; color: var(--text-dim); }
+    .fc-status.done { color: var(--green); }
+    .fc-status.err  { color: var(--red); }
+    .fc-dl { display: block; margin-top: 6px; font-size: 11px; color: var(--pri); text-decoration: none; font-weight: 700; letter-spacing: 1px; }
+
+    /* ── FOOTER / COMMAND BAR ── */
+    footer {
+      flex-shrink: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+      border-top: 1px solid var(--border);
+      background: linear-gradient(0deg, var(--panel), rgba(0,6,10,0.92));
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .prompt { color: var(--pri); font-weight: 700; font-size: 14px; }
+    #inp {
+      flex: 1; min-width: 0; padding: 11px 12px; background: var(--card);
+      border: 1px solid var(--border); color: var(--white);
+      font-family: var(--mono); font-size: 14px; outline: none; transition: border-color .15s, box-shadow .15s;
+    }
+    #inp:focus { border-color: var(--pri); box-shadow: 0 0 0 1px var(--pri), 0 0 14px color-mix(in srgb, var(--pri) 25%, transparent); }
+    #inp::placeholder { color: var(--text-dim); }
+    .hbtn {
+      font-family: var(--mono); padding: 10px 12px; background: var(--card);
+      border: 1px solid var(--border-b); color: var(--pri);
+      font-size: 11px; font-weight: 700; letter-spacing: 1.5px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0;
+      transition: background .15s, transform .1s, box-shadow .15s;
+      clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+    }
+    .hbtn:active { transform: scale(.96); }
+    .hbtn:hover  { background: var(--pri-gho); }
+    .hbtn.send { background: var(--pri); color: var(--bg); border-color: var(--pri); }
+    .hbtn.grow { flex: 1; }
+    #wake { display: none; color: var(--acc2); border-color: color-mix(in srgb, var(--acc2) 50%, transparent); }
+    #wake.show { display: flex; }
+    #spk-btn.off { color: var(--text-dim); border-color: var(--border); }
+    #mic-btn.recording {
+      background: color-mix(in srgb, var(--red) 16%, transparent); border-color: var(--red); color: var(--red);
+      animation: mic-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes mic-pulse {
+      0%,100% { box-shadow: 0 0 4px color-mix(in srgb, var(--red) 40%, transparent); }
+      50%     { box-shadow: 0 0 18px var(--red); }
+    }
+    .hbtn.send { box-shadow: 0 0 14px color-mix(in srgb, var(--pri) 45%, transparent); }
+    .msg-j { text-shadow: 0 0 8px color-mix(in srgb, var(--pri) 35%, transparent); }
+
+    /* ── TOAST ── */
+    #toast {
+      position: fixed; z-index: 5; top: calc(64px + env(safe-area-inset-top)); left: 50%;
+      transform: translateX(-50%) translateY(-8px);
+      background: var(--bg); border: 1px solid var(--green); color: var(--green);
+      font-size: 11px; font-weight: 700; letter-spacing: 2px; padding: 7px 16px;
+      opacity: 0; transition: opacity .22s, transform .22s; pointer-events: none; white-space: nowrap;
+      box-shadow: 0 0 16px color-mix(in srgb, var(--green) 30%, transparent);
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+  <div id="toast"></div>
+
+  <header>
+    <div class="logo">__NAME_UPPER__<small>REMOTE LINK</small></div>
+    <div class="spacer"></div>
+    <div class="tag" id="pill"><span class="dot"></span><span id="st">LINKING</span></div>
+    <div class="tag" id="enc">AES-256</div>
+    <button class="hbtn" id="setupBtn" title="Phone app setup">⚙</button>
+  </header>
+
+  <div class="core-wrap" id="coreWrap">
+    <div class="core-side">
+      <div>LINK<b id="sideLink">—</b></div>
+      <div id="phoneRow" style="display:none">PHONE<b id="phoneLink">—</b></div>
+      <div>HOST<b>__IP__</b></div>
+    </div>
+    <canvas id="core" width="300" height="300"></canvas>
+    <div class="core-side r">
+      <div>PORT<b>__PORT__</b></div>
+      <div>TIME<b id="clock">--:--</b></div>
+    </div>
+  </div>
+
+  <canvas id="wave"></canvas>
+
+  <main id="feed"><div class="feed-title">◉ COMMUNICATION LOG</div></main>
+
+  <footer>
+    <div class="row">
+      <span class="prompt">›</span>
+      <input id="inp" placeholder="Ask __NAME_UPPER__ anything…" autocomplete="off">
+    </div>
+    <div class="row">
+      <label class="hbtn" for="file-inp" title="Send file">📎</label>
+      <input type="file" id="file-inp" multiple accept="*/*" style="display:none">
+      <button class="hbtn" id="mic-btn" onclick="doMic()" title="Voice command">🎤 VOICE</button>
+      <button class="hbtn" id="spk-btn" onclick="toggleSpeaker()" title="Play HABIBI's voice on this phone">🔊</button>
+      <button class="hbtn" id="wake" onclick="doWake()">◉ WAKE</button>
+      <button class="hbtn send grow" onclick="doSend()">SEND ▸</button>
+    </div>
+  </footer>
+
+  <script>
+    const ASSISTANT = '__NAME__';
+
+    // ── Auth — bearer token ───────────────────────────────────────────────────
+    const _authToken  = sessionStorage.getItem('habibi_token');
+    const _sessionKey = sessionStorage.getItem('habibi_key');
+    if (!_authToken) { location.replace('/login'); }
+
+    function _authHeader() { return { 'Authorization': `Bearer ${_authToken}` }; }
+    function _authFetch(url, opts = {}) {
+      opts.headers = Object.assign({}, opts.headers, _authHeader());
+      return fetch(url, opts);
+    }
+
+    // ── AES-256-CBC encryption (CryptoJS) ────────────────────────────────────
+    const _AES_SALT = 'HABIBI-DASHBOARD-v1';
+    let _aesKey = null;
+    function _initCrypto(key) {
+      if (typeof CryptoJS === 'undefined') return false;
+      _aesKey = CryptoJS.SHA256(key + _AES_SALT);
+      return true;
+    }
+    function _encrypt(plaintext) {
+      if (!_aesKey || typeof CryptoJS === 'undefined') return null;
+      try {
+        const iv  = CryptoJS.lib.WordArray.random(16);
+        const enc = CryptoJS.AES.encrypt(
+          CryptoJS.enc.Utf8.parse(plaintext), _aesKey,
+          { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
+        );
+        const hex   = iv.toString(CryptoJS.enc.Hex) + enc.ciphertext.toString(CryptoJS.enc.Hex);
+        const bytes = new Uint8Array(hex.length / 2);
+        for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+        return btoa(String.fromCharCode(...bytes));
+      } catch { return null; }
+    }
+    const _encReady = _sessionKey ? _initCrypto(_sessionKey) : false;
+    const encBadge  = document.getElementById('enc');
+    if (_encReady) { encBadge.className = 'tag enc-on'; encBadge.textContent = 'AES-256'; }
+    else           { encBadge.className = 'tag enc-off'; encBadge.textContent = 'NO ENC'; }
+
+    // ── Reactor core (same look as the desktop HUD) ──────────────────────────
+    const core = { state: 'LINKING', speakUntil: 0, listening: false };
+    // live audio levels: mic (your voice) and speaker (HABIBI's voice)
+    const lv = { mic: 0, micWave: new Float32Array(96), spkQ: [] };
+    function _rms(f32) {
+      let s = 0; for (let i = 0; i < f32.length; i++) s += f32[i] * f32[i];
+      return Math.sqrt(s / Math.max(1, f32.length));
+    }
+    function _down(f32, n) {
+      const out = new Float32Array(n), step = f32.length / n;
+      for (let i = 0; i < n; i++) out[i] = f32[Math.floor(i * step)] || 0;
+      return out;
+    }
+    function _spkNow() {   // HABIBI's voice level + samples at this instant
+      if (!_spkCtx || !lv.spkQ.length) return null;
+      const t = _spkCtx.currentTime;
+      while (lv.spkQ.length && lv.spkQ[0].t1 < t - 0.3) lv.spkQ.shift();
+      for (const e of lv.spkQ) if (e.t0 <= t && t < e.t1) return e;
+      return null;
+    }
+    const cv  = document.getElementById('core');
+    const cx2 = cv.getContext('2d');
+    const css = getComputedStyle(document.documentElement);
+    const COL = {
+      pri:   css.getPropertyValue('--pri').trim() || '#00d4ff',
+      white: '#d8f8ff', acc: '#ff6b00', acc2: '#ffcc00', green: '#00ff88', red: '#ff3355',
+    };
+    function _rgba(hex, a) {
+      const h = hex.replace('#', '');
+      const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+      return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+    }
+    function _stateView() {
+      if (core.listening) return ['LISTENING', COL.red];
+      if (performance.now() < core.speakUntil) return ['SPEAKING', COL.acc];
+      if (core.state === 'ACTIVE')   return ['ONLINE', COL.pri];
+      if (core.state === 'SLEEPING') return ['SLEEPING', COL.acc2];
+      if (core.state === 'OFFLINE')  return ['OFFLINE', COL.red];
+      return [core.state, COL.pri];
+    }
+    let _spinA = 0, _lastT = 0;
+    function drawCore(t) {
+      const W = cv.width, c = W / 2, s = t / 1000;
+      const dt = Math.min(0.1, (t - _lastT) / 1000); _lastT = t;
+      const sp = _spkNow();
+      lv.mic *= 0.88;                                         // mic meter decays between chunks
+      const amp = Math.min(1, Math.max(sp ? sp.rms * 5 : 0, lv.mic * 6));
+      const [label, sc] = _stateView();
+      const live  = label === 'SPEAKING' || label === 'LISTENING';
+      const pulse = Math.max(amp, 0.5 + 0.5 * Math.sin(s * (live ? 4 : 1.6)) * (live ? 0.35 : 1));
+      _spinA += dt * (0.35 + amp * 3.2);
+      const pri = COL.pri;
+      cx2.clearRect(0, 0, W, W);
+
+      // outer glow
+      const g = cx2.createRadialGradient(c, c, W * 0.18, c, c, W * 0.5);
+      g.addColorStop(0, _rgba(live ? sc : pri, 0.10 + 0.10 * pulse + 0.25 * amp)); g.addColorStop(1, _rgba(pri, 0));
+      cx2.fillStyle = g; cx2.fillRect(0, 0, W, W);
+
+      // tick ring
+      cx2.save(); cx2.translate(c, c); cx2.rotate(s * 0.08);
+      for (let i = 0; i < 72; i++) {
+        const a = i / 72 * Math.PI * 2, long = i % 6 === 0;
+        const r1 = W * 0.47, r2 = r1 - (long ? W * 0.035 : W * 0.018);
+        cx2.strokeStyle = _rgba(pri, long ? 0.75 : 0.3); cx2.lineWidth = long ? 2 : 1;
+        cx2.beginPath(); cx2.moveTo(Math.cos(a) * r1, Math.sin(a) * r1); cx2.lineTo(Math.cos(a) * r2, Math.sin(a) * r2); cx2.stroke();
+      }
+      cx2.restore();
+
+      // rotating arc segments
+      const arcs = [
+        { r: 0.405, w: 3,   n: 3, len: 0.9, sp:  0.5, a: 0.85 },
+        { r: 0.365, w: 1.5, n: 5, len: 0.5, sp: -0.8, a: 0.55 },
+        { r: 0.325 + amp * 0.03, w: 5 + amp * 3, n: 2, len: 1.2, sp: 0, rot: _spinA, a: Math.min(1, 0.7 + amp * 0.3), col: live ? sc : pri },
+      ];
+      for (const ar of arcs) {
+        cx2.strokeStyle = _rgba(ar.col || pri, ar.a); cx2.lineWidth = ar.w; cx2.lineCap = 'butt';
+        for (let i = 0; i < ar.n; i++) {
+          const st = (ar.rot !== undefined ? ar.rot : s * ar.sp) + i * (Math.PI * 2 / ar.n);
+          cx2.beginPath(); cx2.arc(c, c, W * ar.r, st, st + ar.len); cx2.stroke();
+        }
+      }
+
+      // core plate
+      const rc = W * (0.27 + 0.006 * pulse + 0.02 * amp);
+      const pg = cx2.createRadialGradient(c, c, 0, c, c, rc);
+      pg.addColorStop(0, _rgba(pri, 0.22)); pg.addColorStop(0.7, 'rgba(1,13,20,0.98)'); pg.addColorStop(1, 'rgba(0,6,10,0.98)');
+      cx2.fillStyle = pg; cx2.strokeStyle = _rgba(live ? sc : pri, Math.min(1, 0.7 + 0.3 * amp)); cx2.lineWidth = 2 + 2 * amp;
+      cx2.shadowColor = live ? sc : pri; cx2.shadowBlur = 10 + 30 * amp;
+      cx2.beginPath(); cx2.arc(c, c, rc, 0, Math.PI * 2); cx2.fill(); cx2.stroke();
+      cx2.shadowBlur = 0;
+      cx2.strokeStyle = _rgba(pri, 0.25); cx2.lineWidth = 1;
+      cx2.beginPath(); cx2.arc(c, c, rc * 0.88, 0, Math.PI * 2); cx2.stroke();
+
+      // waveform inside the core — the real audio that is playing / being heard
+      if (live) {
+        const wv = sp ? sp.wave : lv.micWave;
+        cx2.strokeStyle = _rgba(sc, 0.9); cx2.lineWidth = 2; cx2.beginPath();
+        for (let i = 0; i < wv.length; i++) {
+          const x = c - rc * 0.7 + (i / (wv.length - 1)) * rc * 1.4;
+          const y = c + rc * 0.52 + Math.max(-1, Math.min(1, wv[i] * 4)) * rc * 0.16;
+          i ? cx2.lineTo(x, y) : cx2.moveTo(x, y);
+        }
+        cx2.stroke();
+      }
+
+      // name + state
+      const nm = ASSISTANT.toUpperCase().slice(0, 9);
+      const fs = Math.min(W * 0.10, (rc * 1.7) / Math.max(nm.length, 4) * 1.35);
+      cx2.textAlign = 'center'; cx2.textBaseline = 'middle';
+      cx2.font = `700 ${fs}px Consolas, Menlo, monospace`;
+      cx2.shadowColor = pri; cx2.shadowBlur = 12; cx2.fillStyle = COL.white;
+      cx2.fillText(nm, c, c - rc * 0.08);
+      cx2.shadowBlur = 0;
+      cx2.font = `700 ${W * 0.042}px Consolas, Menlo, monospace`;
+      cx2.fillStyle = sc; cx2.fillText(label, c, c + rc * 0.34);
+      drawWave(s, sp, amp, live ? sc : pri);
+      requestAnimationFrame(drawCore);
+    }
+    // full-width waveform strip under the reactor (like the desktop HUD)
+    const wcv = document.getElementById('wave');
+    const wctx = wcv.getContext('2d');
+    function drawWave(s, sp, amp, col) {
+      const dpr = window.devicePixelRatio || 1;
+      const W = Math.round(wcv.clientWidth * dpr), H = Math.round(wcv.clientHeight * dpr);
+      if (!W || !H) return;
+      if (wcv.width !== W || wcv.height !== H) { wcv.width = W; wcv.height = H; }
+      wctx.clearRect(0, 0, W, H);
+      const mid = H / 2, bars = 64, bw = W / bars;
+      const src = sp ? sp.wave : (core.listening ? lv.micWave : null);
+      wctx.shadowColor = col; wctx.shadowBlur = 8 * dpr;
+      for (let i = 0; i < bars; i++) {
+        let v;
+        if (src) v = Math.min(1, Math.abs(src[Math.floor(i / bars * src.length)]) * 6 + amp * 0.15);
+        else v = 0.06 + 0.05 * Math.sin(s * 2 + i * 0.35);           // idle shimmer
+        const env = Math.sin(Math.PI * (i + 0.5) / bars);            // taller in the middle
+        const h = Math.max(1.5 * dpr, v * env * (H * 0.46));
+        wctx.fillStyle = _rgba(col, Math.min(1, 0.35 + 0.6 * (v + amp * 0.4)));
+        wctx.fillRect(i * bw + bw * 0.2, mid - h, bw * 0.6, h * 2);
+      }
+      wctx.shadowBlur = 0;
+    }
+    requestAnimationFrame(drawCore);
+
+    setInterval(() => {
+      const d = new Date();
+      document.getElementById('clock').textContent =
+        String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }, 1000);
+
+    // shrink the reactor when the keyboard opens, so the log stays readable
+    const coreWrap = document.getElementById('coreWrap');
+    document.getElementById('inp').addEventListener('focus', () => coreWrap.classList.add('mini'));
+    document.getElementById('inp').addEventListener('blur',  () => coreWrap.classList.remove('mini'));
+
+    // ── WebSocket ─────────────────────────────────────────────────────────────
+    const feed  = document.getElementById('feed');
+    const pill  = document.getElementById('pill');
+    const stTxt = document.getElementById('st');
+    const wake  = document.getElementById('wake');
+    const sideLink = document.getElementById('sideLink');
+
+    const _wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const _wsUrl   = `${_wsProto}://${location.host}/ws?token=${encodeURIComponent(_authToken)}`;
+    const ws       = new WebSocket(_wsUrl);
+
+    ws.onopen  = () => {
+      sideLink.textContent = 'SECURE'; if (core.state === 'LINKING') core.state = 'ACTIVE';
+      sys('Remote session active.'); toast('LINKED TO ' + ASSISTANT.toUpperCase());
+    };
+    ws.onclose = () => { core.state = 'OFFLINE'; sideLink.textContent = 'LOST'; setPill('', 'OFFLINE');
+                         sys('Connection lost — refresh to reconnect.', true); };
+    ws.onerror = () => sys('Connection error.', true);
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      if (m.type === 'log')           append(m.speaker, m.text);
+      if (m.type === 'status')        setStatus(m.state);
+      if (m.type === 'wake')          sys('Wake word detected — connecting…');
+      if (m.type === 'sys')           sys(m.text);
+      if (m.type === 'file_received') _onFileReceived(m);
+    };
+
+    function setPill(cls, text) { pill.className = 'tag ' + cls; stTxt.textContent = text; }
+    function setStatus(s) {
+      if (s === 'active') { core.state = 'ACTIVE';   setPill('on', 'ACTIVE');      wake.classList.remove('show'); }
+      else                { core.state = 'SLEEPING'; setPill('sleep', 'SLEEPING'); wake.classList.add('show'); }
+    }
+
+    function append(speaker, text) {
+      const d = document.createElement('div');
+      if (speaker === 'habibi' || speaker === 'jarvis' || speaker === 'ai') {
+        d.className = 'msg msg-j';
+        d.innerHTML = `<div class="lbl">${esc(ASSISTANT)}</div>${esc(text)}`;
+        core.speakUntil = performance.now() + Math.min(9000, 1200 + text.length * 55);
+      } else {
+        d.className = 'msg msg-u';
+        d.innerHTML = `<div class="lbl">You</div>${esc(text)}`;
+      }
+      feed.appendChild(d);
+      feed.scrollTop = feed.scrollHeight;
+    }
+
+    function sys(text, isErr) {
+      const d = document.createElement('div');
+      d.className = 'msg msg-sys' + (isErr || /\berr/i.test(text) ? ' err' : '');
+      d.textContent = 'SYS › ' + text;
+      feed.appendChild(d); feed.scrollTop = feed.scrollHeight;
+    }
+
+    function esc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ── File helpers ──────────────────────────────────────────────────────────
+    function _fileIcon(name) {
+      const ext = (name.split('.').pop() || '').toLowerCase();
+      if (['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','svg'].includes(ext)) return '🖼️';
+      if (['mp4','mov','avi','mkv','webm','m4v','3gp'].includes(ext))                       return '🎬';
+      if (['mp3','m4a','wav','flac','aac','ogg','opus'].includes(ext))                      return '🎵';
+      if (['pdf'].includes(ext))                                                             return '📋';
+      if (['doc','docx','txt','md','rtf','odt'].includes(ext))                              return '📝';
+      if (['xls','xlsx','csv','ods'].includes(ext))                                         return '📊';
+      if (['ppt','pptx','odp'].includes(ext))                                               return '📑';
+      if (['zip','rar','7z','tar','gz','bz2','xz'].includes(ext))                          return '📦';
+      if (['apk','exe','dmg','deb','rpm','msi'].includes(ext))                              return '⚙️';
+      return '📎';
+    }
+    function _fmtSize(bytes) {
+      if (bytes < 1024)         return bytes + ' B';
+      if (bytes < 1024 * 1024)  return (bytes / 1024).toFixed(1) + ' KB';
+      if (bytes < 1024 ** 3)    return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+      return (bytes / 1024 ** 3).toFixed(2) + ' GB';
+    }
+
+    // ── File upload (phone → computer) ────────────────────────────────────────
+    function _uploadFile(file) {
+      const id = 'fc_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+      const card = document.createElement('div');
+      card.className = 'msg-file';
+      card.id = id;
+      card.innerHTML = `
+        <div class="fc-icon">${_fileIcon(file.name)}</div>
+        <div class="fc-meta">
+          <div class="fc-lbl">Sending</div>
+          <div class="fc-name">${esc(file.name)}</div>
+          <div class="fc-size">${_fmtSize(file.size)}</div>
+          <div class="fc-bar-wrap"><div class="fc-bar" id="${id}_bar"></div></div>
+        </div>
+        <div class="fc-status" id="${id}_st">0%</div>`;
+      feed.appendChild(card);
+      feed.scrollTop = feed.scrollHeight;
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload');
+      xhr.setRequestHeader('Authorization', `Bearer ${_authToken}`);
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const pct = Math.round(e.loaded / e.total * 100);
+        const bar = document.getElementById(`${id}_bar`);
+        const st  = document.getElementById(`${id}_st`);
+        if (bar) bar.style.width = pct + '%';
+        if (st)  st.textContent  = pct + '%';
+      };
+      xhr.onload = () => {
+        const bar  = document.getElementById(`${id}_bar`);
+        const st   = document.getElementById(`${id}_st`);
+        const meta = card.querySelector('.fc-meta');
+        const lbl  = card.querySelector('.fc-lbl');
+        if (xhr.status === 200) {
+          let savedName = file.name;
+          try { savedName = JSON.parse(xhr.responseText).name || file.name; } catch {}
+          const dlUrl = `/uploads/${encodeURIComponent(savedName)}?token=${encodeURIComponent(_authToken)}`;
+          if (bar)  { bar.style.width = '100%'; bar.style.background = 'var(--green)'; }
+          if (st)   { st.textContent = '✓'; st.className = 'fc-status done'; }
+          if (lbl)  lbl.textContent = 'Sent';
+          if (meta) meta.insertAdjacentHTML('beforeend',
+            `<a class="fc-dl" href="${dlUrl}" download="${esc(savedName)}">⬇ DOWNLOAD BACK</a>`);
+          toast('FILE SENT');
+        } else {
+          let errMsg = 'Upload failed';
+          try { errMsg = JSON.parse(xhr.responseText).error || errMsg; } catch {}
+          if (bar) bar.style.background = 'var(--red)';
+          if (st)  { st.textContent = 'ERR'; st.className = 'fc-status err'; }
+          if (lbl) lbl.textContent = errMsg;
+        }
+      };
+      xhr.onerror = () => {
+        const st  = document.getElementById(`${id}_st`);
+        const lbl = card.querySelector('.fc-lbl');
+        if (st)  { st.textContent = 'ERR'; st.className = 'fc-status err'; }
+        if (lbl) lbl.textContent = 'Connection error';
+      };
+      const fd = new FormData();
+      fd.append('file', file);
+      xhr.send(fd);
+    }
+
+    function _onFileReceived(m) {
+      const dlUrl = `/uploads/${encodeURIComponent(m.name)}?token=${encodeURIComponent(_authToken)}`;
+      const card  = document.createElement('div');
+      card.className = 'msg-file';
+      card.innerHTML = `
+        <div class="fc-icon">${_fileIcon(m.name)}</div>
+        <div class="fc-meta">
+          <div class="fc-lbl">Received</div>
+          <div class="fc-name">${esc(m.name)}</div>
+          <div class="fc-size">${_fmtSize(m.size)}</div>
+          <a class="fc-dl" href="${dlUrl}" download="${esc(m.name)}">⬇ DOWNLOAD</a>
+        </div>
+        <div class="fc-status done">✓</div>`;
+      feed.appendChild(card);
+      feed.scrollTop = feed.scrollHeight;
+      toast('FILE RECEIVED ON COMPUTER');
+    }
+
+    document.getElementById('file-inp').addEventListener('change', function () {
+      Array.from(this.files).forEach(_uploadFile);
+      this.value = '';
+    });
+
+    // ── Commands ──────────────────────────────────────────────────────────────
+    function doSend() {
+      const inp = document.getElementById('inp');
+      const txt = inp.value.trim();
+      if (!txt) return;
+      inp.value = '';
+      append('user', txt);
+      const enc  = _encrypt(txt);
+      const body = enc ? { enc } : { text: txt };
+      _authFetch('/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+    }
+    function doWake() {
+      sys('Sending wake signal…');
+      _authFetch('/api/wake', { method: 'POST' });
+    }
+    document.getElementById('inp').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
+    });
+
+    // ── Toast ─────────────────────────────────────────────────────────────────
+    let _toastTimer;
+    function toast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg; t.classList.add('show');
+      clearTimeout(_toastTimer);
+      _toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+    }
+
+    // ── Real-time Voice — PCM16 WebSocket → Gemini Live ──────────────────────
+    const micBtn  = document.getElementById('mic-btn');
+    let _voiceWs  = null;
+    let _audioCtx = null;
+    let _micStm   = null;
+    let _audioNd  = null;
+
+    function _micIdle() {
+      micBtn.innerHTML = '🎤 VOICE';
+      micBtn.title     = 'Voice — tap to speak';
+      micBtn.classList.remove('recording');
+      core.listening   = false;
+    }
+
+    function _f32toPcm16(f32, srcRate) {
+      let s = f32;
+      if (srcRate !== 16000) {
+        const ratio = srcRate / 16000;
+        const len   = Math.round(f32.length / ratio);
+        s = new Float32Array(len);
+        for (let i = 0; i < len; i++) s[i] = f32[Math.min(Math.round(i * ratio), f32.length - 1)];
+      }
+      const out = new Int16Array(s.length);
+      for (let i = 0; i < s.length; i++) out[i] = Math.max(-32768, Math.min(32767, Math.round(s[i] * 32768)));
+      return out.buffer;
+    }
+
+    function _showVoiceSetup() {
+      if (document.getElementById('voice-setup')) return;
+      const origin = location.origin;
+      const card = document.createElement('div');
+      card.id = 'voice-setup';
+      card.className = 'msg msg-j';
+      card.style.maxWidth = 'none';
+      card.style.alignSelf = 'stretch';
+      card.innerHTML =
+        '<div class="lbl">🎤 One-time voice setup</div>' +
+        '<ol style="padding-left:18px;color:var(--text);margin:0;display:flex;flex-direction:column;gap:4px;white-space:normal">' +
+        '<li>Open a new tab → go to <b style="color:var(--white)">chrome://flags</b></li>' +
+        '<li>Search: <b style="color:var(--white)">Insecure origins treated as secure</b></li>' +
+        '<li>Paste this URL into the box:<br><span id="flags-url" style="background:var(--pri-gho);padding:2px 8px;user-select:all;cursor:pointer;color:var(--white)">' + esc(origin) + '</span></li>' +
+        '<li>Set to <b style="color:var(--green)">Enabled</b> → tap <b style="color:var(--white)">Relaunch</b></li>' +
+        '<li>Return here and tap 🎤 VOICE</li>' +
+        '</ol>';
+      feed.appendChild(card);
+      feed.scrollTop = feed.scrollHeight;
+      card.querySelector('#flags-url').addEventListener('click', () => {
+        navigator.clipboard?.writeText(origin).then(() => toast('URL COPIED')).catch(() => {});
+      });
+    }
+
+    // Live listening (like the PC mic): stays on until you turn it off,
+    // reconnects by itself, and is the default inside the Habibi phone app.
+    const APP = window.HabibiApp || null;
+    let _voiceWant = localStorage.getItem('habibi_live') === 'on' ||
+                     (!!APP && localStorage.getItem('habibi_live') !== 'off');
+    function _speakingNow() { return performance.now() < core.speakUntil; }
+
+    function doMic() {
+      _voiceWant = !_voiceWant;
+      localStorage.setItem('habibi_live', _voiceWant ? 'on' : 'off');
+      if (_voiceWant) _startVoice(); else { _stopVoice(); sys('Live listening off.'); }
+    }
+
+    async function _startVoice() {
+      if (_voiceWs || !_voiceWant) return;
+      if (!navigator.mediaDevices?.getUserMedia) { _voiceWant = false; _showVoiceSetup(); return; }
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        });
+      } catch (e) {
+        sys(e.name === 'NotAllowedError'
+          ? 'Microphone denied — tap the address bar lock and allow microphone.'
+          : 'Mic error: ' + e.message, true);
+        return;
+      }
+      let ctx;
+      try { ctx = new AudioContext({ sampleRate: 16000 }); }
+      catch (_) { ctx = new AudioContext(); }
+      if (ctx.state === 'suspended') await ctx.resume();
+
+      const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const vws = new WebSocket(
+        `${wsProto}://${location.host}/ws/phone-audio?token=${encodeURIComponent(_authToken)}`
+      );
+      vws.binaryType = 'arraybuffer';
+
+      vws.onopen = async () => {
+        const rate = ctx.sampleRate;
+        const src  = ctx.createMediaStreamSource(stream);
+        const wCode = `class J extends AudioWorkletProcessor{process(i){const c=i[0]?.[0];if(c)this.port.postMessage(c.slice());return true;}}registerProcessor('j',J);`;
+        try {
+          const burl = URL.createObjectURL(new Blob([wCode], { type: 'application/javascript' }));
+          await ctx.audioWorklet.addModule(burl);
+          URL.revokeObjectURL(burl);
+          const nd = new AudioWorkletNode(ctx, 'j');
+          let _pbuf = [], _plen = 0;
+          nd.port.onmessage = e => {
+            lv.mic = Math.max(lv.mic, _rms(e.data)); lv.micWave = _down(e.data, 96);
+            if (_speakingNow()) { _pbuf = []; _plen = 0; return; }   // don't send HABIBI's own voice back
+            const chunk = new Int16Array(_f32toPcm16(e.data, rate));
+            _pbuf.push(chunk); _plen += chunk.length;
+            if (_plen >= 1024) {
+              const out = new Int16Array(_plen); let off = 0;
+              for (const c of _pbuf) { out.set(c, off); off += c.length; }
+              if (vws.readyState === 1) vws.send(out.buffer);
+              _pbuf = []; _plen = 0;
+            }
+          };
+          src.connect(nd);
+          _audioNd = nd;
+        } catch (_) {
+          const sp = ctx.createScriptProcessor(4096, 1, 1);
+          sp.onaudioprocess = e => {
+            const d = e.inputBuffer.getChannelData(0);
+            lv.mic = Math.max(lv.mic, _rms(d)); lv.micWave = _down(d, 96);
+            if (_speakingNow()) return;
+            if (vws.readyState === 1) vws.send(_f32toPcm16(d, rate));
+          };
+          src.connect(sp); sp.connect(ctx.destination);
+          _audioNd = sp;
+        }
+        micBtn.innerHTML = '🎤 LIVE';
+        micBtn.title     = 'Listening — tap to turn off';
+        micBtn.classList.add('recording');
+        core.listening   = true;
+        if (APP && APP.keepAwake) APP.keepAwake(true);
+        sys('Live listening on — just speak.');
+        toast('🎤 LIVE');
+      };
+      vws.onclose = () => {
+        _stopVoice();
+        if (_voiceWant) setTimeout(_startVoice, 1500);   // reconnect, like the PC mic
+      };
+      vws.onerror = () => {};
+
+      _voiceWs  = vws;
+      _audioCtx = ctx;
+      _micStm   = stream;
+    }
+
+    // ── Phone speaker — HABIBI's voice (PCM16 24 kHz) played on this phone ──
+    const spkBtn = document.getElementById('spk-btn');
+    let _spkOn   = localStorage.getItem('habibi_speaker') !== 'off';
+    let _spkCtx  = null, _spkWs = null, _spkNext = 0, _spkNodes = [], _spkHinted = false;
+
+    function _spkUI() {
+      spkBtn.textContent = _spkOn ? '🔊' : '🔇';
+      spkBtn.classList.toggle('off', !_spkOn);
+    }
+    function _spkEnsureCtx() {
+      if (!_spkCtx) {
+        try { _spkCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+        catch (_) { return false; }
+      }
+      if (_spkCtx.state === 'suspended') _spkCtx.resume().catch(() => {});
+      return true;
+    }
+    function _spkConnect() {
+      if (!_spkOn || (_spkWs && _spkWs.readyState < 2)) return;
+      const p = location.protocol === 'https:' ? 'wss' : 'ws';
+      const w = new WebSocket(`${p}://${location.host}/ws/phone-speaker?token=${encodeURIComponent(_authToken)}`);
+      w.binaryType = 'arraybuffer';
+      w.onmessage = e => {
+        if (typeof e.data === 'string') { if (e.data === 'stop') _spkFlush(); return; }
+        _spkPlay(e.data);
+      };
+      w.onclose = () => { if (_spkWs === w) { _spkWs = null; if (_spkOn) setTimeout(_spkConnect, 2000); } };
+      _spkWs = w;
+    }
+    function _spkPlay(buf) {
+      if (!_spkOn || !_spkEnsureCtx()) return;
+      if (_spkCtx.state !== 'running') {
+        if (!_spkHinted) { _spkHinted = true; sys('Tap anywhere once to turn on the phone speaker.'); }
+        return;
+      }
+      const i16 = new Int16Array(buf);
+      if (!i16.length) return;
+      const ab = _spkCtx.createBuffer(1, i16.length, 24000);
+      const ch = ab.getChannelData(0);
+      for (let i = 0; i < i16.length; i++) ch[i] = i16[i] / 32768;
+      const src = _spkCtx.createBufferSource();
+      src.buffer = ab; src.connect(_spkCtx.destination);
+      const now = _spkCtx.currentTime;
+      if (_spkNext < now + 0.04) _spkNext = now + 0.12;   // small jitter buffer
+      src.start(_spkNext);
+      lv.spkQ.push({ t0: _spkNext, t1: _spkNext + ab.duration, rms: _rms(ch), wave: _down(ch, 96) });
+      _spkNext += ab.duration;
+      _spkNodes.push(src);
+      src.onended = () => { const k = _spkNodes.indexOf(src); if (k >= 0) _spkNodes.splice(k, 1); };
+      core.speakUntil = performance.now() + (_spkNext - now) * 1000 + 150;
+    }
+    function _spkFlush() {
+      _spkNodes.forEach(n => { try { n.stop(); } catch (_) {} });
+      _spkNodes = []; _spkNext = 0; core.speakUntil = 0; lv.spkQ = [];
+    }
+    function toggleSpeaker() {
+      _spkOn = !_spkOn;
+      localStorage.setItem('habibi_speaker', _spkOn ? 'on' : 'off');
+      _spkUI();
+      if (_spkOn) { _spkEnsureCtx(); _spkConnect(); toast('🔊 PHONE SPEAKER ON'); }
+      else {
+        _spkFlush();
+        if (_spkWs) { const w = _spkWs; _spkWs = null; w.close(); }
+        toast('🔇 PHONE SPEAKER OFF');
+      }
+    }
+    // Browsers only allow sound after the first tap on the page.
+    document.addEventListener('pointerdown', () => { if (_spkOn) _spkEnsureCtx(); }, { passive: true });
+    _spkUI();
+    if (_spkOn) _spkConnect();
+
+    function _stopVoice() {
+      if (_audioNd)  { try { _audioNd.disconnect(); } catch (_) {}; _audioNd  = null; }
+      if (_audioCtx) { try { _audioCtx.close(); }     catch (_) {}; _audioCtx = null; }
+      if (_micStm)   { _micStm.getTracks().forEach(t => t.stop()); _micStm = null; }
+      if (_voiceWs)  { const w = _voiceWs; _voiceWs = null; w.onclose = null; if (w.readyState < 2) w.close(); }
+      if (APP && APP.keepAwake) APP.keepAwake(false);
+      _micIdle();
+    }
+
+    // ── Habibi phone app extras ──────────────────────────────────────────────
+    if (APP) {
+      const sb = document.getElementById('setupBtn');
+      sb.style.display = 'flex';
+      sb.onclick = () => APP.openSetup();
+      document.getElementById('phoneRow').style.display = '';
+      const pl = document.getElementById('phoneLink');
+      setInterval(() => {
+        const st = APP.linkStatus();
+        pl.textContent = st === 'linked' ? 'LINKED' : 'LINKING';
+        pl.style.color = st === 'linked' ? 'var(--green)' : 'var(--acc2)';
+      }, 1500);
+    }
+    if (_voiceWant) setTimeout(_startVoice, 600);
+  </script>
+</body>
+</html>

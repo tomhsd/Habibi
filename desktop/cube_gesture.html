@@ -1,0 +1,50 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>3D Cube with Gestures</title>
+    <style>
+        body { margin: 0; background-color: #000; overflow: hidden; }
+        #cube-container {
+            width: 200px; height: 200px;
+            position: absolute; top: 50%; left: 50%;
+            transform-style: preserve-3d;
+            transform: translate(-50%, -50%) rotateX(-30deg) rotateY(45deg);
+        }
+        .cube-face {
+            width: 200px; height: 200px;
+            position: absolute;
+            opacity: 0.8; border: 2px solid white;
+        }
+        .front  { transform: translateZ(100px); background: #ff0000; }
+        .back   { transform: rotateY(180deg) translateZ(100px); background: #00ff00; }
+        .right  { transform: rotateY(90deg) translateZ(100px); background: #0000ff; }
+        .left   { transform: rotateY(-90deg) translateZ(100px); background: #ffff00; }
+        .top    { transform: rotateX(90deg) translateZ(100px); background: #ff00ff; }
+        .bottom { transform: rotateX(-90deg) translateZ(100px); background: #00ffff; }
+    </style>
+</head>
+<body>
+    <div id="cube-container">
+        <div class="cube-face front"></div>
+        <div class="cube-face back"></div>
+        <div class="cube-face right"></div>
+        <div class="cube-face left"></div>
+        <div class="cube-face top"></div>
+        <div class="cube-face bottom"></div>
+    </div>
+    <!-- Handtrack.js is a placeholder for actual gesture control logic -->
+    <script src="https://cdn.jsdelivr.net/npm/handtrackjs/dist/handtrack.min.js"></script>
+    <script>
+        // NOTE: Actual gesture logic to translate hand movement into rotation
+        // would go here. Handtrack.js is included, but needs training/setup.
+        console.log("Ready to implement gesture control.");
+        document.addEventListener('mousemove', (e) => {
+            const rx = (e.clientY / window.innerHeight - 0.5) * 360;
+            const ry = (e.clientX / window.innerWidth - 0.5) * 360;
+            document.getElementById('cube-container').style.transform = 
+                `translate(-50%, -50%) rotateX(${rx}deg) rotateY(${ry}deg)`;
+        });
+    </script>
+</body>
+</html>
