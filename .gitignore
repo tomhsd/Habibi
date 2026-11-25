@@ -87,3 +87,4 @@ config/safety.json
 config/activity_log*.jsonl
 config/macros/
 smoke_results.json
+media_selftest.png

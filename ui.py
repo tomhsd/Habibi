@@ -3999,6 +3999,7 @@ class MainWindow(QMainWindow):
     _confirm_sig    = pyqtSignal(str, str)   # (title, detail) — irreversible-action gate
     _confirm_hide_sig = pyqtSignal()
     _wake_dl_sig    = pyqtSignal(bool, str)  # wake-word install finished (ok, message)
+    _media_sig      = pyqtSignal(object)     # (cmd, args, holder, event) from the AI → media player
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -4106,6 +4107,7 @@ class MainWindow(QMainWindow):
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
         self._hud_cam_stack.addWidget(_cam_cont)
+        self._build_media_video()          # index 2: video from the media player
 
         # The mic strip lives with the reactor, above the splitter handle, so
         # the content panel can be dragged open without pushing it off-screen.
@@ -4166,6 +4168,7 @@ class MainWindow(QMainWindow):
         self._cam_frame_sig.connect(self._on_cam_frame)
         self._clipboard_sig.connect(self._show_clipboard_panel)
         self._wake_dl_sig.connect(self._on_wake_install_done)
+        self._media_sig.connect(self._on_media_cmd)
         self._cam_stop = threading.Event()
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
@@ -4311,6 +4314,16 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(inner)
         lay.setContentsMargins(0, 0, 4, 0)
         lay.setSpacing(8)
+
+        # ── MEDIA PLAYER (ui_media.py) ───────────────────────────────────────
+        self._media = self._media_card = None
+        try:
+            import ui_media
+            self._media = ui_media.MediaEngine(self)
+            self._media_card = ui_media.MediaCard(self._media)
+            lay.addWidget(self._media_card)
+        except Exception as e:
+            print(f"[Media] player unavailable: {e}")
 
         # ── CPU ──────────────────────────────────────────────────────────────
         cpu_card = CornerCard("CPU")
@@ -4737,6 +4750,73 @@ class MainWindow(QMainWindow):
     # ══════════════════════════════════════════════════════════════════════
     #  Camera
     # ══════════════════════════════════════════════════════════════════════
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  Media player: video page + RGB animation + AI commands
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _build_media_video(self) -> None:
+        self._media_rgb = None
+        if self._media is None:
+            return
+        try:
+            from PyQt6.QtMultimediaWidgets import QVideoWidget
+            import ui_media
+            page = QWidget()
+            page.setStyleSheet("background: #000;")
+            v = QVBoxLayout(page)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(0)
+            self._video = QVideoWidget()
+            self._video.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+            self._media.player.setVideoOutput(self._video)
+            v.addWidget(self._video, 1)
+            bar = QHBoxLayout()
+            bar.setContentsMargins(8, 4, 8, 4)
+            back = QPushButton("◀  REACTOR")
+            full = QPushButton("⛶  FULL SCREEN")
+            for b in (back, full):
+                b.setFont(_mono(9, True))
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.setStyleSheet(f"QPushButton {{ color: {C.TEXT}; background: {C.PRI_GHO};"
+                                f" border: 1px solid {C.BORDER}; border-radius: 4px; padding: 3px 10px; }}"
+                                f"QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI_DIM}; }}")
+            back.clicked.connect(lambda: self._media_card.b_vid.setChecked(False))
+            full.clicked.connect(lambda: self._video.setFullScreen(not self._video.isFullScreen()))
+            bar.addWidget(back)
+            bar.addStretch()
+            bar.addWidget(full)
+            v.addLayout(bar)
+            self._hud_cam_stack.addWidget(page)
+            self._media_card.want_video.connect(self._show_media_video)
+            self._media_rgb = ui_media.RgbAnimator(self, self._media, self._media_card.spectrum)
+            self._media_card.b_rgb.toggled.connect(lambda on: setattr(self._media_rgb, "enabled", on))
+            self._media.error.connect(lambda m: self._log.append_log(f"SYS: Media — {m}"))
+        except Exception as e:
+            print(f"[Media] video unavailable: {e}")
+
+    def _show_media_video(self, on: bool) -> None:
+        if self._hud_cam_stack.currentIndex() == 1:      # camera has priority
+            return
+        if on:
+            self._hud_cam_stack.setCurrentIndex(2)
+        elif self._hud_cam_stack.currentIndex() == 2:
+            if self._video.isFullScreen():
+                self._video.setFullScreen(False)
+            self._hud_cam_stack.setCurrentIndex(0)
+
+    def _on_media_cmd(self, payload) -> None:
+        cmd, args, holder, ev = payload
+        try:
+            if self._media is None:
+                holder["r"] = "The media player isn't available on this PC (Qt Multimedia missing)."
+            else:
+                import ui_media
+                holder["r"] = ui_media.run_command(self._media, self._media_card, self._media_rgb, cmd, args)
+        except Exception as e:
+            holder["r"] = f"Media player error: {e}"
+        finally:
+            ev.set()
 
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display the camera preview overlay (main thread)."""
@@ -6105,6 +6185,15 @@ class HabibiUI:
     @on_audio_device_change.setter
     def on_audio_device_change(self, cb):
         self._win.on_audio_device_change = cb
+
+    def media(self, cmd: str, **args) -> str:
+        """Thread-safe: control the built-in media player from an action thread."""
+        holder: dict = {}
+        ev = threading.Event()
+        self._win._media_sig.emit((cmd, args, holder, ev))
+        if not ev.wait(8):
+            return "The media player didn't answer."
+        return holder.get("r", "")
 
     def show_confirm(self, title: str, detail: str) -> None:
         """Thread-safe: raise the irreversible-action gate. Called from action

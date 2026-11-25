@@ -38,32 +38,24 @@ def _windows():
 
 
 def _window(title: str = ""):
-    """The window whose title contains `title`, or the window in front."""
-    if title:
-        t = title.lower()
-        wins = _windows()
-        for w in wins:
-            if w.window_text().lower() == t:
-                return w
-        for w in wins:
-            if t in w.window_text().lower():
-                return w
-        raise LookupError(f"No open window matches '{title}'.")
-    import ctypes
-    hwnd = ctypes.windll.user32.GetForegroundWindow()
+    """The window the user means: best title/app match, or (blank) the window
+    they were using before talking to Habibi — never Habibi's own HUD."""
+    from core import target
+    hwnd = target.find(title)
     return _desktop().window(handle=hwnd).wrapper_object()
 
 
-def _bring_front(win) -> None:
-    """Front the window without tapping Alt (Alt would open the app's menu bar)."""
+def _bring_front(win) -> bool:
+    """Front the window and confirm it really is in front."""
+    from core import target
     try:
-        from actions.window_manager import focus_window
-        focus_window(win.handle)
+        return target.bring_front(win.handle)
     except Exception:
         try:
             win.set_focus()
         except Exception:
             pass
+        return False
 
 
 def _check_allowed(win) -> None:
@@ -144,6 +136,56 @@ def _find(win, name: str, control_type: str = ""):
     return best
 
 
+_EDITABLE = ("Edit", "Document", "ComboBox")
+
+
+def _find_field(win, name: str):
+    """The text box called `name`. Prefers editable controls; if the name is
+    only on a label, takes the text box right next to (or under) that label."""
+    for ct in _EDITABLE:
+        el = _find(win, name, ct)
+        if el is not None:
+            return el
+    el = _find(win, name, "")
+    if el is None or _info(el)[1] in _EDITABLE:
+        return el
+    try:
+        lr = el.rectangle()
+    except Exception:
+        return el
+    best, dist = None, 10 ** 9
+    for cand in _walk(win):
+        if _info(cand)[1] not in ("Edit", "ComboBox") or not _visible(cand):
+            continue
+        try:
+            r = cand.rectangle()
+        except Exception:
+            continue
+        right_of = abs(r.top - lr.top) < 25 and r.left >= lr.left
+        below = r.top >= lr.top and abs(r.left - lr.left) < 60
+        if not (right_of or below):
+            continue
+        d = abs(r.left - lr.right) + abs(r.top - lr.top)
+        if d < dist and d < 400:
+            best, dist = cand, d
+    return best or el
+
+
+def _has_focus(el) -> bool:
+    """True when the keyboard focus is in this element (or inside it)."""
+    try:
+        from pywinauto.uia_defines import IUIA
+        f = IUIA().get_focused_element()
+        r = el.rectangle()
+        fr = f.CurrentBoundingRectangle
+        if IUIA().iuia.CompareElements(f, el.element_info.element):
+            return True
+        return r.left <= fr.left and r.top <= fr.top and fr.right <= r.right and fr.bottom <= r.bottom \
+            and (fr.right - fr.left) > 0
+    except Exception:
+        return True       # can't tell: don't block
+
+
 def _main_editable(win):
     """The text box the user most likely means: the focused editable element,
     otherwise the largest visible Edit/Document control of the window."""
@@ -209,15 +251,9 @@ def _escape_keys(text: str) -> str:
 # ── actions ──────────────────────────────────────────────────────────────────
 
 def _list_windows() -> str:
-    lines = []
-    for w in _windows()[:40]:
-        try:
-            import psutil
-            proc = psutil.Process(w.process_id()).name()
-        except Exception:
-            proc = "?"
-        lines.append(f"• {w.window_text()}  ({proc})")
-    return "Open windows:\n" + "\n".join(lines) if lines else "No open windows found."
+    from core import target
+    lines = [f"• {target.title_of(h)}  ({target.process_of(h) or '?'})" for h in target.user_windows()[:40]]
+    return "Open windows (front-most first):\n" + "\n".join(lines) if lines else "No open windows found."
 
 
 def _list_elements(win, query: str, control_type: str) -> str:
@@ -252,10 +288,6 @@ def _click(win, name: str, control_type: str, double: bool, right: bool) -> str:
     def _do() -> str:
         safety.check_stop()
         before = A.snapshot()
-        try:
-            _bring_front(win)
-        except Exception:
-            pass
         done = False
         if not double and not right:
             for attempt in ("invoke", "select", "toggle"):
@@ -266,6 +298,9 @@ def _click(win, name: str, control_type: str, double: bool, right: bool) -> str:
                 except Exception:
                     continue
         if not done:
+            if not _bring_front(win):
+                return (f"Didn't click: '{win.window_text()}' wouldn't come to the front, "
+                        f"so the click could land on another window.")
             el.click_input(button="right" if right else "left", double=double)
         return f"Clicked {ct} '{n}'. " + A.describe_change(before)
 
@@ -273,55 +308,66 @@ def _click(win, name: str, control_type: str, double: bool, right: bool) -> str:
 
 
 def _type(win, text: str, field: str, clear: bool, enter: bool) -> str:
+    from core import target
+
     def _do() -> str:
         safety.check_stop()
         before = A.snapshot()
-        try:
-            _bring_front(win)
-        except Exception:
-            pass
-        target = _find(win, field, "") if field else _main_editable(win)
-        if field and target is None:
-            return f"No field '{field}' found in '{win.window_text()}'."
-        if target is not None:
+        hwnd = win.handle
+        target_el = _find_field(win, field) if field else _main_editable(win)
+        if field and target_el is None:
+            return f"No field '{field}' found in '{win.window_text()}'. Nothing was typed."
+        where = f"'{field}'" if field else "the text box"
+
+        # 1. Fill the field directly through UI Automation (needs no focus, can't go astray)
+        if target_el is not None and not enter:
             try:
-                target.set_focus()
+                target_el.set_edit_text(text if clear else (target_el.get_value() or "") + text)
+                time.sleep(0.15)
+                if not text.strip() or text.strip()[:30] in _value(target_el):
+                    return (f"Typed {len(text)} characters into {where} of "
+                            f"'{win.window_text()}'. ✓ Checked: the text is there.")
             except Exception:
                 pass
-        written = False
-        if target is not None and not enter:
+
+        # 2. Real keystrokes: only once the right window AND field have focus
+        if not _bring_front(win):
+            return (f"Nothing typed: I couldn't bring '{win.window_text()}' to the front, so the "
+                    f"keys could have gone somewhere else. Click that window once and ask again.")
+        if target_el is not None:
             try:
-                if clear:
-                    target.set_edit_text(text)
-                else:
-                    target.set_edit_text((target.get_value() or "") + text)
-                written = True
+                target_el.set_focus()
             except Exception:
-                written = False
-        if not written:
-            from pywinauto.keyboard import send_keys
-            if target is not None:
+                pass
+            if not _has_focus(target_el):
                 try:
-                    target.set_focus()
+                    target_el.click_input()
+                    time.sleep(0.1)
                 except Exception:
-                    try:
-                        target.click_input()
-                    except Exception:
-                        pass
-            if clear and target is not None:
+                    pass
+            if not _has_focus(target_el):
+                return (f"Nothing typed: the cursor didn't go into {where}. "
+                        f"Use list_elements to pick the exact field name.")
+        from pywinauto.keyboard import send_keys
+        try:
+            target.require_front(hwnd)
+            if clear and target_el is not None:
                 send_keys("^a{BACKSPACE}")
-            for i in range(0, len(text), 40):          # in pieces so STOP can interrupt
+            for i in range(0, len(text), 40):          # in pieces so STOP / a window switch can interrupt
                 safety.check_stop()
-                send_keys(_escape_keys(text[i:i + 40]), with_spaces=True, pause=0.01)
-        if enter:
-            from pywinauto.keyboard import send_keys
-            send_keys("{ENTER}")
-        where = f"'{field}'" if field else "the text box"
-        if target is not None and text.strip():
+                target.require_front(hwnd)
+                send_keys(_escape_keys(text[i:i + 40]), with_spaces=True, pause=0.01, vk_packet=True)
+            if enter:
+                target.require_front(hwnd)
+                send_keys("{ENTER}")
+        except target.FocusLost as e:
+            return str(e)
+        if target_el is not None and text.strip():
             time.sleep(0.2)
-            if text.strip()[:30] in _value(target):
-                return f"Typed {len(text)} characters into {where}. ✓ Checked: the text is there."
-        return f"Typed {len(text)} characters into {where}. " + A.describe_change(before)
+            if text.strip()[:30] in _value(target_el):
+                return (f"Typed {len(text)} characters into {where} of "
+                        f"'{win.window_text()}'. ✓ Checked: the text is there.")
+        return f"Typed {len(text)} characters into {where} of '{win.window_text()}'. " + A.describe_change(before)
 
     return safety.guarded("input", "Type text", text[:80], _do)
 
@@ -361,7 +407,8 @@ def ui_control(parameters: dict, player=None) -> str:
         _check_allowed(win)
         if action == "focus":
             before = A.snapshot()
-            _bring_front(win)
+            if not _bring_front(win):
+                return f"Couldn't bring '{win.window_text()}' to the front."
             return f"Brought '{win.window_text()}' to the front. " + A.describe_change(before, 0.25)
         if action == "list_elements":
             return _list_elements(win, str(parameters.get("query", "")), str(parameters.get("control_type", "")))
