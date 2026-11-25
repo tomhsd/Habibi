@@ -2585,6 +2585,149 @@ class PersonalityOverlay(QWidget):
         self.hide()
 
 
+class VoiceLockOverlay(QWidget):
+    """Floating overlay — record the owner's voiceprint and turn the voice lock on/off."""
+
+    _OW = 440
+    _LINES = (
+        "Please read these lines aloud, in any language you like:\n\n"
+        "“Habibi, this is my voice. Only listen to me.\n"
+        "Open my music, check the weather and remind me at nine.\n"
+        "Today I am testing my voice lock, one, two, three, four, five.”"
+    )
+
+    def __init__(self, command, parent=None):
+        super().__init__(parent)
+        self._cmd = command                     # callable(cmd, arg) -> status dict
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            VoiceLockOverlay {{
+                background: rgba(0, 6, 10, 245);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 6px;
+            }}
+        """)
+        self.setFixedWidth(self._OW)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 16, 22, 16)
+        lay.setSpacing(8)
+
+        def _lbl(txt, fs=8, bold=False, color=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft):
+            w = QLabel(txt)
+            w.setAlignment(align)
+            w.setWordWrap(True)
+            w.setFont(_mono(fs, bold))
+            w.setStyleSheet(f"color: {color}; background: transparent;")
+            return w
+
+        lay.addWidget(_lbl("🔒  VOICE LOCK", 12, True, C.PRI, Qt.AlignmentFlag.AlignCenter))
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
+        lay.addWidget(sep)
+        lay.addWidget(_lbl("Habibi checks the first second of every sentence. If it isn't your "
+                           "voice, Habibi hears silence. Works for the PC and phone microphones; "
+                           "typing always works."))
+
+        self._status = _lbl("", 10, True, C.TEXT, Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self._status)
+
+        self._script = _lbl(self._LINES, 9, False, C.WHITE)
+        self._script.setStyleSheet(f"color: {C.WHITE}; background: {C.PRI_GHO}; "
+                                   f"border: 1px solid {C.BORDER_B}; border-radius: 3px; padding: 10px;")
+        self._script.setMinimumHeight(150)
+        self._script.hide()
+        lay.addWidget(self._script)
+
+        def _btn(text, primary=False):
+            b = QPushButton(text)
+            b.setFixedHeight(32)
+            b.setFont(_mono(8, True))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(f"""
+                QPushButton {{ background: {C.PRI_GHO if primary else 'transparent'};
+                    color: {C.PRI if primary else C.TEXT_MED};
+                    border: 1px solid {C.PRI if primary else C.BORDER}; border-radius: 3px; }}
+                QPushButton:hover {{ color: {C.TEXT}; border-color: {C.PRI}; }}
+                QPushButton:disabled {{ color: {C.BORDER}; border-color: {C.BORDER}; }}
+            """)
+            return b
+
+        self._rec = _btn("🎙  RECORD MY VOICE  (15 s)", True)
+        self._rec.clicked.connect(self._record)
+        lay.addWidget(self._rec)
+
+        row = QHBoxLayout(); row.setSpacing(6)
+        self._toggle = _btn("")
+        self._toggle.clicked.connect(self._flip)
+        self._strict = _btn("")
+        self._strict.clicked.connect(self._flip_strict)
+        row.addWidget(self._toggle); row.addWidget(self._strict)
+        lay.addLayout(row)
+
+        row2 = QHBoxLayout(); row2.setSpacing(6)
+        self._forget = _btn("DELETE VOICEPRINT")
+        self._forget.clicked.connect(lambda: self._apply(self._cmd("forget", None)))
+        close = _btn("CLOSE")
+        close.clicked.connect(self.hide)
+        row2.addWidget(self._forget); row2.addWidget(close)
+        lay.addLayout(row2)
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(lambda: self._apply(self._cmd("status", None)))
+        self._apply(self._cmd("status", None))
+
+    def _record(self):
+        self._apply(self._cmd("enroll", None))
+        self._timer.start(400)
+
+    def _flip(self):
+        st = self._cmd("status", None)
+        self._apply(self._cmd("enable", not st.get("enabled")))
+
+    def _flip_strict(self):
+        st = self._cmd("status", None)
+        self._apply(self._cmd("strict", "normal" if st.get("strictness") == "strict" else "strict"))
+
+    def _apply(self, st: dict):
+        if not st or "enrolled" not in st:
+            self._status.setText(st.get("error", "Voice lock unavailable") if st else "Voice lock unavailable")
+            for b in (self._rec, self._toggle, self._strict, self._forget):
+                b.setEnabled(False)
+            return
+        busy = st["preparing"] or st["enrolling"]
+        self._script.setVisible(st["enrolling"])
+        self._rec.setEnabled(not busy)
+        if st["preparing"]:
+            self._status.setText("⏳  Getting the voice engine ready…")
+            self._status.setStyleSheet(f"color: {C.ACC2}; background: transparent;")
+        elif st["enrolling"]:
+            self._status.setText(f"🔴  LISTENING — keep reading…  {st['seconds_left']} s")
+            self._status.setStyleSheet(f"color: {C.RED}; background: transparent;")
+        elif st.get("error"):
+            self._status.setText(st["error"])
+            self._status.setStyleSheet(f"color: {C.ACC2}; background: transparent;")
+        elif st["last_ok"] is False:
+            self._status.setText("✖  " + st["last_msg"])
+            self._status.setStyleSheet(f"color: {C.RED}; background: transparent;")
+        elif st["enabled"]:
+            self._status.setText("🔒  ON — Habibi obeys only your voice")
+            self._status.setStyleSheet(f"color: {C.GREEN}; background: transparent;")
+        elif st["enrolled"]:
+            self._status.setText("🔓  OFF — voiceprint saved, lock not active")
+            self._status.setStyleSheet(f"color: {C.ACC2}; background: transparent;")
+        else:
+            self._status.setText("No voiceprint yet — press RECORD MY VOICE")
+            self._status.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        if not busy and self._timer.isActive() and st["last_ok"] is not None:
+            self._timer.stop()
+        self._toggle.setEnabled(st["enrolled"] and not busy)
+        self._toggle.setText("TURN LOCK OFF" if st["enabled"] else "TURN LOCK ON")
+        self._strict.setEnabled(st["enrolled"] and not busy)
+        self._strict.setText("STRICTNESS: " + ("STRICT" if st["strictness"] == "strict" else "NORMAL"))
+        self._forget.setEnabled(st["enrolled"] and not busy)
+        self.adjustSize()
+
+
 class PluginManagerOverlay(QWidget):
     """Floating overlay — lists discovered plugins with per-plugin ON/OFF toggles."""
 
@@ -3732,6 +3875,7 @@ class MainWindow(QMainWindow):
         self.on_interrupt      = None   # callable: () -> None — stop mid-speech
         self.on_voice_change   = None   # callable: () -> None — rebuild session with new voice
         self.on_persona_change = None   # callable: () -> None — rebuild session with new personality
+        self.on_voice_lock_cmd = None   # callable: (cmd, arg) -> dict — 🔒 VOICE LOCK panel
         self.on_audio_device_change = None  # callable: () -> None — reopen audio streams
         self._confirm_overlay  = None   # live ConfirmBanner, if one is on screen
         self.get_plugins       = None   # callable: () -> list[dict], set by HabibiLive
@@ -4953,6 +5097,14 @@ class MainWindow(QMainWindow):
         pers_btn.clicked.connect(self._open_personality)
         lay.addWidget(pers_btn)
 
+        vl_btn = QPushButton("🔒  VOICE LOCK")
+        vl_btn.setFixedHeight(26)
+        vl_btn.setFont(_mono(7))
+        vl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        vl_btn.setStyleSheet(_BTN_STYLE_DIM)
+        vl_btn.clicked.connect(self._open_voice_lock)
+        lay.addWidget(vl_btn)
+
         self._brief_btn = QPushButton()
         self._brief_btn.setFixedHeight(26)
         self._brief_btn.setFont(_mono(7))
@@ -5333,6 +5485,20 @@ class MainWindow(QMainWindow):
         self._remote_overlay = ov
         self._log.append_log(f"SYS: Remote key generated — manual: {manual or url}")
 
+    def _open_voice_lock(self):
+        old = getattr(self, "_voice_lock_overlay", None)
+        if old:
+            old.hide()
+        cmd = self.on_voice_lock_cmd or (lambda c, a: {"error": "Habibi is still starting — try again."})
+        cw = self.centralWidget()
+        ov = VoiceLockOverlay(cmd, parent=cw)
+        ov.adjustSize()
+        oh = min(ov.sizeHint().height() + 120, cw.height() - 16)
+        ov.setGeometry((cw.width() - ov._OW) // 2, max(8, (cw.height() - oh) // 2), ov._OW, oh)
+        ov.show()
+        ov.raise_()
+        self._voice_lock_overlay = ov
+
     def _open_personality(self):
         old = getattr(self, "_personality_overlay", None)
         if old:
@@ -5706,6 +5872,14 @@ class HabibiUI:
     @on_interrupt.setter
     def on_interrupt(self, cb):
         self._win.on_interrupt = cb
+
+    @property
+    def on_voice_lock_cmd(self):
+        return self._win.on_voice_lock_cmd
+
+    @on_voice_lock_cmd.setter
+    def on_voice_lock_cmd(self, cb):
+        self._win.on_voice_lock_cmd = cb
 
     @property
     def on_persona_change(self):

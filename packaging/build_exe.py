@@ -74,6 +74,7 @@ def main() -> None:
         ("config/habibi.ico", "config"),
         ("config/settings.json", "config"),
         ("habibi_description.txt", "."),
+        ("config/models", "config/models"),     # voice-lock speaker model (downloaded in CI)
     ]
     args = [
         str(ROOT / "main.py"),
@@ -88,7 +89,7 @@ def main() -> None:
     ]
     for pkg in ("core", "memory", "dashboard", "config", "uvicorn"):
         args += ["--collect-submodules", pkg]
-    for pkg in ("playwright", "openwakeword"):
+    for pkg in ("playwright", "openwakeword", "sherpa_onnx"):
         if importlib.util.find_spec(pkg) is not None:
             args += ["--collect-all", pkg]
     for src, dest in data:

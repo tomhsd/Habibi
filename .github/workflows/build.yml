@@ -34,6 +34,10 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller fastapi "uvicorn[standard]" cryptography python-multipart "qrcode[pil]"
           pip install openwakeword || echo "openwakeword skipped (wake word will be unavailable)"
+          pip install sherpa-onnx
+          mkdir -p config/models
+          curl -fsSL -o config/models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx \
+            https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx
 
       - name: Self-test Windows encryption (DPAPI)
         run: >-

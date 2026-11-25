@@ -77,3 +77,7 @@ signing/
 *.jks
 *.keystore
 keystore.b64
+
+# Voice lock: your voiceprint and the downloaded model
+config/voiceprint.json
+config/models/

@@ -430,6 +430,13 @@ class HabibiLive:
         self._is_speaking         = False
         self._speaking_lock       = threading.Lock()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
+        # 🔒 Voice lock — only the owner's voice reaches the AI (core/voice_lock.py)
+        try:
+            from core.voice_lock import VoiceLock
+            self._voice_lock = VoiceLock(log=lambda t: self.ui.write_log(t))
+        except Exception as _e:
+            print(f"[VoiceLock] unavailable: {_e}")
+            self._voice_lock = None
         self._pending_vision       = None    # (img_bytes, mime_type, question, angle) to inject after tool response
         self._vision_cam_active    = False   # True if camera was opened for vision → auto-close after response
         self._vision_close_pending = False   # True after vision injected; next turn_complete closes camera
@@ -440,6 +447,7 @@ class HabibiLive:
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
         self.ui.on_voice_change   = self._on_voice_change     # voice picker → rebuild session
+        self.ui.on_voice_lock_cmd = self._voice_lock_cmd             # 🔒 VOICE LOCK panel
         self.ui.on_persona_change = lambda: self.request_reconnect(
             keep_context=False, reason="new personality")       # ♥ PERSONALITY → rebuild session
         self.ui.on_audio_device_change = self._on_audio_device_change
@@ -707,6 +715,62 @@ class HabibiLive:
         self._dashboard_error = reason
         print(f"[Dashboard] {reason}")
         self.ui.write_log(f"ERR: Remote Control — {reason}")
+
+    def _voice_lock_cmd(self, cmd: str, arg=None) -> dict:
+        """Called by the 🔒 VOICE LOCK panel (Qt thread). Returns the current status."""
+        import threading as _th
+        vl = self._voice_lock
+        if vl is None:
+            return {"error": "Voice lock is not available in this installation."}
+        if cmd == "enroll" and not vl.enrolling and not getattr(self, "_vl_preparing", False):
+            if self._wake_enabled and not self._awake:
+                return dict(self._voice_lock_status(), error="Wake Habibi first, then record your voice.")
+
+            def _done(ok, msg):
+                self._vl_last = (ok, msg)
+                self.ui.write_log(("SYS: Voice lock — " if ok else "ERR: Voice lock — ") + msg + ".")
+
+            def _prep():
+                self._vl_preparing = True
+                try:
+                    if not vl.engine_installed() and not getattr(sys, "frozen", False):
+                        self.ui.write_log("SYS: Voice lock — installing the voice engine (one time)…")
+                        _pip_install(["sherpa-onnx"])
+                    ok, why = vl.ensure_model()
+                    if not ok:
+                        _done(False, why)
+                        return
+                    vl.start_enroll(15, _done)
+                finally:
+                    self._vl_preparing = False
+            self._vl_last = None
+            _th.Thread(target=_prep, daemon=True).start()
+        elif cmd == "enable":
+            vl.set_enabled(bool(arg) and vl.enrolled)
+            self.ui.write_log("SYS: Voice lock " + ("ON — only your voice is obeyed." if vl.cfg["enabled"] else "OFF."))
+        elif cmd == "strict":
+            vl.set_strictness(str(arg))
+        elif cmd == "forget":
+            vl.forget()
+            self.ui.write_log("SYS: Voice lock — voiceprint deleted.")
+        # an enrollment that never received audio (e.g. session offline) still finishes
+        if vl.enrolling and time.time() > vl._enroll_until + 4:
+            _th.Thread(target=vl._finish_enroll, daemon=True).start()
+        return self._voice_lock_status()
+
+    def _voice_lock_status(self) -> dict:
+        vl = self._voice_lock
+        last = getattr(self, "_vl_last", None)
+        return {
+            "enrolled": vl.enrolled,
+            "enabled": bool(vl.cfg.get("enabled")) and vl.enrolled,
+            "strictness": vl.cfg.get("strictness", "normal"),
+            "preparing": bool(getattr(self, "_vl_preparing", False)),
+            "enrolling": vl.enrolling,
+            "seconds_left": max(0, int(vl._enroll_until - time.time())) if vl.enrolling else 0,
+            "last_ok": None if last is None else last[0],
+            "last_msg": "" if last is None else last[1],
+        }
 
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
@@ -1041,17 +1105,27 @@ class HabibiLive:
     async def _send_realtime(self):
         while True:
             msg = await self.out_queue.get()
+            # 🔒 Voice lock: PC mic and phone mic both pass through here, so
+            # one gate covers both. Other voices become silence.
+            chunks = [msg["data"]]
+            vl = self._voice_lock
+            if vl is not None and (vl.enrolling or vl.active):
+                try:
+                    chunks = await vl.process(msg["data"], asyncio.get_running_loop())
+                except Exception as _e:
+                    print(f"[VoiceLock] gate error: {_e}")
             # Gemini 3.x Live rejects the old realtime_input.media_chunks field
             # (what `media=...` maps to) and closes the socket with a 1007. Send
             # mic / phone PCM through the new `audio` field instead. Queue items
             # are {"data": <bytes>, "mime_type": <str>} from _listen_audio and
             # the phone relay.
-            await self.session.send_realtime_input(
-                audio=types.Blob(
-                    data=msg["data"],
-                    mime_type=msg.get("mime_type", "audio/pcm"),
+            for _data in chunks:
+                await self.session.send_realtime_input(
+                    audio=types.Blob(
+                        data=_data,
+                        mime_type=msg.get("mime_type", "audio/pcm"),
+                    )
                 )
-            )
 
     async def _listen_audio(self):
         print("[HABIBI] 🎤 Mic started")
