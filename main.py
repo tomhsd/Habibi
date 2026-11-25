@@ -433,6 +433,8 @@ class HabibiLive:
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
         self.ui.on_voice_change   = self._on_voice_change     # voice picker → rebuild session
+        self.ui.on_persona_change = lambda: self.request_reconnect(
+            keep_context=False, reason="new personality")       # ♥ PERSONALITY → rebuild session
         self.ui.on_audio_device_change = self._on_audio_device_change
         self._reconnect_event: asyncio.Event | None = None
         self._reconnect_keep = True   # False → next rebuild drops the resumption handle
@@ -712,6 +714,11 @@ class HabibiLive:
         return url, key, f"{url}/auto-login?key={key}", manual
 
     def _on_text_command(self, text: str):
+        try:
+            from core import persona as _persona
+            _persona.mark_talk()
+        except Exception:
+            pass
         if not self._loop or not self.session:
             return
         # Respect wake-word sleep: a typed command must not be answered while
@@ -807,14 +814,28 @@ class HabibiLive:
                       "language. Never an archaic or aristocratic form, and never "
                       "the form from a different language than the one you are "
                       "speaking in this sentence.")
+        # Personality (⚙ → PERSONALITY) and Habibi's own mood
+        from core import persona as _persona
+        _pcfg = _persona.load_persona()
+        _persona.session_start_mood()
+        _self_name = (_pcfg.get("name") or "").strip() or self._asst_name
+        if _pcfg["persona"] != "assistant" and not _user_name:
+            _addr = ("ADDRESS: Call the user by their name if you know it, or a warm "
+                     "nickname. Never 'sir' or any formal title.")
         identity_ctx = (
             f"[IDENTITY]\n"
-            f"Your name is {self._asst_name}. "
-            f"Always refer to yourself as {self._asst_name}.\n"
+            f"Your name is {_self_name}. "
+            f"Always refer to yourself as {_self_name}.\n"
             f"{_addr}\n\n"
         )
+        persona_ctx = _persona.build_persona_prompt(_self_name, _user_name)
+        try:
+            from actions.set_mood import announce_mood
+            announce_mood(self.ui)
+        except Exception:
+            pass
 
-        parts = [time_ctx, identity_ctx]
+        parts = [time_ctx, identity_ctx, persona_ctx]
         if mem_str:
             parts.append(mem_str)
         parts.append(sys_prompt)
@@ -1145,6 +1166,13 @@ class HabibiLive:
 
                         if sc.input_transcription and sc.input_transcription.text:
                             txt = _clean_transcript(sc.input_transcription.text)
+                            if time.time() - getattr(self, "_last_talk_mark", 0) > 60:
+                                self._last_talk_mark = time.time()
+                                try:
+                                    from core import persona as _persona
+                                    _persona.mark_talk()
+                                except Exception:
+                                    pass
                             if txt:
                                 in_buf.append(txt)
                                 self._last_user_speech = time.monotonic()

@@ -1296,11 +1296,19 @@ class HudCanvas(QWidget):
         p.drawText(QRectF(cx - r_core, cy + r_core * 0.30, r_core * 2, 18),
                    Qt.AlignmentFlag.AlignCenter, s_txt)
 
-        p.setFont(_mono(max(6, int(fw * 0.0165))))
-        p.setPen(QPen(qcol(C.TEXT_DIM), 1))
-        sub = "COGNITIVE CORE ACTIVE" if not self.muted else "MICROPHONE OFF"
-        p.drawText(QRectF(cx - r_core, cy + r_core * 0.56, r_core * 2, 14),
-                   Qt.AlignmentFlag.AlignCenter, sub)
+        mood_lbl = getattr(self, "_mood_label", "")
+        if mood_lbl and not self.muted:
+            # Habibi's own feeling, in its colour (set by core/persona via set_mood)
+            p.setFont(_mono(max(6, int(fw * 0.0175)), True))
+            p.setPen(QPen(QColor(getattr(self, "_mood_color", C.PRI)), 1))
+            p.drawText(QRectF(cx - r_core, cy + r_core * 0.56, r_core * 2, 14),
+                       Qt.AlignmentFlag.AlignCenter, mood_lbl)
+        else:
+            p.setFont(_mono(max(6, int(fw * 0.0165))))
+            p.setPen(QPen(qcol(C.TEXT_DIM), 1))
+            sub = "COGNITIVE CORE ACTIVE" if not self.muted else "MICROPHONE OFF"
+            p.drawText(QRectF(cx - r_core, cy + r_core * 0.56, r_core * 2, 14),
+                       Qt.AlignmentFlag.AlignCenter, sub)
 
         # particles
         for pt in self._particles:
@@ -2407,6 +2415,173 @@ class CustomizeOverlay(QWidget):
         name = self._name_input.text().strip() or "HABIBI"
         user = self._user_input.text().strip()
         self.saved.emit(name, user, self._sel_color or DEFAULT_UI_COLOR, self._sel_voice)
+        self.hide()
+
+
+class PersonalityOverlay(QWidget):
+    """Floating overlay — choose Habibi's personality, her name, what she calls
+    you and how affectionate she is (core/persona.py)."""
+
+    saved = pyqtSignal(bool)   # True if the voice was switched too
+    _OW = 420
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from core import persona
+        from memory.config_manager import get_voice
+        self._persona = persona
+        cfg = persona.load_persona()
+        self._sel_p = cfg["persona"]
+        self._sel_a = cfg["affection"]
+
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            PersonalityOverlay {{
+                background: rgba(0, 6, 10, 245);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 6px;
+            }}
+        """)
+        self.setFixedWidth(self._OW)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 16, 22, 16)
+        lay.setSpacing(7)
+
+        def _lbl(txt, fs=8, bold=False, color=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft):
+            w = QLabel(txt)
+            w.setAlignment(align)
+            w.setWordWrap(True)
+            w.setFont(_mono(fs, bold))
+            w.setStyleSheet(f"color: {color}; background: transparent;")
+            return w
+
+        _fs = (f"QLineEdit {{ background: #000d12; color: {C.TEXT}; "
+               f"border: 1px solid {C.BORDER}; border-radius: 3px; padding: 4px 8px; }}"
+               f"QLineEdit:focus {{ border: 1px solid {C.PRI}; }}")
+
+        lay.addWidget(_lbl("♥  PERSONALITY", 12, True, C.PRI, Qt.AlignmentFlag.AlignCenter))
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
+        lay.addWidget(sep)
+
+        lay.addWidget(_lbl("WHO SHOULD HABIBI BE?"))
+        self._p_btns: dict[str, QPushButton] = {}
+        row = QHBoxLayout(); row.setSpacing(4)
+        for key in persona.PERSONAS:
+            b = QPushButton(persona.PERSONA_LABELS[key])
+            b.setFixedHeight(30)
+            b.setFont(_mono(7, True))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, k=key: self._pick_p(k))
+            self._p_btns[key] = b
+            row.addWidget(b)
+        lay.addLayout(row)
+
+        lay.addSpacing(4)
+        lay.addWidget(_lbl("HER / HIS NAME  (blank = the assistant name)"))
+        self._name = QLineEdit(cfg.get("name", ""))
+        self._name.setPlaceholderText("e.g.  Mayra")
+        self._name.setFont(_mono(10)); self._name.setFixedHeight(32); self._name.setStyleSheet(_fs)
+        lay.addWidget(self._name)
+
+        lay.addWidget(_lbl("WHAT SHOULD SHE CALL YOU?  (blank = your name or a sweet nickname)"))
+        self._pet = QLineEdit(cfg.get("pet_name", ""))
+        self._pet.setPlaceholderText("e.g.  habibi, jaan, baby, Mehedi")
+        self._pet.setFont(_mono(10)); self._pet.setFixedHeight(32); self._pet.setStyleSheet(_fs)
+        lay.addWidget(self._pet)
+
+        lay.addSpacing(4)
+        self._aff_title = _lbl("AFFECTION  (girlfriend / wife)")
+        lay.addWidget(self._aff_title)
+        self._a_btns: dict[str, QPushButton] = {}
+        arow = QHBoxLayout(); arow.setSpacing(4)
+        for key in persona.AFFECTION:
+            b = QPushButton(persona.AFFECTION_LABELS[key].replace("&", "&&"))
+            b.setFixedHeight(28)
+            b.setFont(_mono(7, True))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, k=key: self._pick_a(k))
+            self._a_btns[key] = b
+            arow.addWidget(b)
+        lay.addLayout(arow)
+
+        lay.addSpacing(4)
+        self._voice_btn = QPushButton()
+        self._voice_btn.setCheckable(True)
+        self._voice_btn.setFixedHeight(28)
+        self._voice_btn.setFont(_mono(7, True))
+        self._voice_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._voice_btn.clicked.connect(self._refresh)
+        self._male_voice = get_voice() in ("Charon", "Puck", "Fenrir")
+        self._voice_btn.setChecked(self._male_voice)
+        lay.addWidget(self._voice_btn)
+
+        lay.addWidget(_lbl("Habibi has her own moods (happy, missing you, worried…). They show "
+                           "under the reactor and on your phone. Changing personality starts a "
+                           "fresh conversation; long-term memories are kept.", 7))
+
+        btns = QHBoxLayout(); btns.setSpacing(8)
+        cancel = QPushButton("CANCEL")
+        save = QPushButton("SAVE  ♥")
+        for b, primary in ((cancel, False), (save, True)):
+            b.setFixedHeight(32)
+            b.setFont(_mono(8, True))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(f"""
+                QPushButton {{ background: {C.PRI_GHO if primary else 'transparent'};
+                    color: {C.PRI if primary else C.TEXT_MED};
+                    border: 1px solid {C.PRI if primary else C.BORDER}; border-radius: 3px; }}
+                QPushButton:hover {{ color: {C.TEXT}; border-color: {C.PRI}; }}
+            """)
+            btns.addWidget(b)
+        cancel.clicked.connect(self.hide)
+        save.clicked.connect(self._save)
+        lay.addLayout(btns)
+        self._refresh()
+
+    def _pill(self, b: QPushButton, on: bool, enabled: bool = True) -> None:
+        b.setEnabled(enabled)
+        if on and enabled:
+            b.setStyleSheet(f"""QPushButton {{ background: {C.PRI_GHO}; color: {C.PRI};
+                border: 1px solid {C.PRI}; border-radius: 3px; }}""")
+        else:
+            b.setStyleSheet(f"""QPushButton {{ background: transparent;
+                color: {C.TEXT_MED if enabled else C.BORDER};
+                border: 1px solid {C.BORDER}; border-radius: 3px; }}
+                QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}""")
+
+    def _refresh(self, *_):
+        romantic = self._sel_p in self._persona.ROMANTIC
+        for k, b in self._p_btns.items():
+            self._pill(b, k == self._sel_p)
+        for k, b in self._a_btns.items():
+            self._pill(b, k == self._sel_a, romantic)
+        show_voice = romantic and self._male_voice
+        self._voice_btn.setVisible(show_voice)
+        self._voice_btn.setText(("☑" if self._voice_btn.isChecked() else "☐")
+                                + "  ALSO SWITCH TO A FEMALE VOICE (AOEDE)")
+        self._pill(self._voice_btn, self._voice_btn.isChecked())
+
+    def _pick_p(self, k: str):
+        self._sel_p = k
+        self._refresh()
+
+    def _pick_a(self, k: str):
+        self._sel_a = k
+        self._refresh()
+
+    def _save(self):
+        cfg = self._persona.load_persona()
+        cfg.update(persona=self._sel_p, affection=self._sel_a,
+                   name=self._name.text().strip(), pet_name=self._pet.text().strip())
+        self._persona.save_persona(cfg)
+        voice_switched = False
+        if (self._sel_p in self._persona.ROMANTIC and self._male_voice
+                and self._voice_btn.isChecked()):
+            from memory.config_manager import save_voice
+            save_voice("Aoede")
+            voice_switched = True
+        self.saved.emit(voice_switched)
         self.hide()
 
 
@@ -3556,6 +3731,7 @@ class MainWindow(QMainWindow):
         self.on_remote_clicked = None   # callable: () -> (url, key) | None
         self.on_interrupt      = None   # callable: () -> None — stop mid-speech
         self.on_voice_change   = None   # callable: () -> None — rebuild session with new voice
+        self.on_persona_change = None   # callable: () -> None — rebuild session with new personality
         self.on_audio_device_change = None  # callable: () -> None — reopen audio streams
         self._confirm_overlay  = None   # live ConfirmBanner, if one is on screen
         self.get_plugins       = None   # callable: () -> list[dict], set by HabibiLive
@@ -4769,6 +4945,14 @@ class MainWindow(QMainWindow):
         cust_btn.clicked.connect(self._open_customize)
         lay.addWidget(cust_btn)
 
+        pers_btn = QPushButton("♥  PERSONALITY")
+        pers_btn.setFixedHeight(26)
+        pers_btn.setFont(_mono(7))
+        pers_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        pers_btn.setStyleSheet(_BTN_STYLE_DIM)
+        pers_btn.clicked.connect(self._open_personality)
+        lay.addWidget(pers_btn)
+
         self._brief_btn = QPushButton()
         self._brief_btn.setFixedHeight(26)
         self._brief_btn.setFont(_mono(7))
@@ -5149,6 +5333,30 @@ class MainWindow(QMainWindow):
         self._remote_overlay = ov
         self._log.append_log(f"SYS: Remote key generated — manual: {manual or url}")
 
+    def _open_personality(self):
+        old = getattr(self, "_personality_overlay", None)
+        if old:
+            old.hide()
+        cw = self.centralWidget()
+        ov = PersonalityOverlay(parent=cw)
+        ov.adjustSize()
+        oh = min(ov.sizeHint().height(), cw.height() - 16)
+        ov.setGeometry((cw.width() - ov._OW) // 2, (cw.height() - oh) // 2, ov._OW, oh)
+        ov.saved.connect(self._apply_personality)
+        ov.show()
+        ov.raise_()
+        self._personality_overlay = ov
+
+    def _apply_personality(self, voice_switched: bool):
+        from core import persona
+        cfg = persona.load_persona()
+        who = persona.PERSONA_LABELS[cfg["persona"]].title()
+        name = cfg.get("name") or self._assistant_name
+        self._log.append_log(f"SYS: Personality set — {name}, {who}"
+                             + (" (voice: Aoede)" if voice_switched else ""))
+        if self.on_persona_change:
+            self.on_persona_change()
+
     def _open_customize(self):
         cfg = _read_full_config()
         if self._customize_overlay:
@@ -5500,6 +5708,14 @@ class HabibiUI:
         self._win.on_interrupt = cb
 
     @property
+    def on_persona_change(self):
+        return self._win.on_persona_change
+
+    @on_persona_change.setter
+    def on_persona_change(self, cb):
+        self._win.on_persona_change = cb
+
+    @property
     def on_voice_change(self):
         return self._win.on_voice_change
 
@@ -5579,6 +5795,13 @@ class HabibiUI:
 
     def set_state(self, state: str):
         self._win._state_sig.emit(state)
+
+    def set_mood(self, key: str, label: str, color: str) -> None:
+        """Thread-safe: show Habibi's current feeling on the reactor."""
+        hud = getattr(self._win, "hud", None)
+        if hud is not None:
+            hud._mood_label = label
+            hud._mood_color = color
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)

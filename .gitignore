@@ -67,3 +67,7 @@ phone_app/.gradle/
 phone_app/build/
 phone_app/app/build/
 phone_app/local.properties
+
+# Habibi personality and mood (personal)
+config/persona.json
+config/mood.json

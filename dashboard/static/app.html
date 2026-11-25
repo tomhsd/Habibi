@@ -224,6 +224,7 @@
     </div>
     <canvas id="core" width="300" height="300"></canvas>
     <div class="core-side r">
+      <div>MOOD<b id="moodTxt">—</b></div>
       <div>PORT<b>__PORT__</b></div>
       <div>TIME<b id="clock">--:--</b></div>
     </div>
@@ -290,7 +291,7 @@
     else           { encBadge.className = 'tag enc-off'; encBadge.textContent = 'NO ENC'; }
 
     // ── Reactor core (same look as the desktop HUD) ──────────────────────────
-    const core = { state: 'LINKING', speakUntil: 0, listening: false };
+    const core = { state: 'LINKING', speakUntil: 0, listening: false, mood: null };
     // live audio levels: mic (your voice) and speaker (HABIBI's voice)
     const lv = { mic: 0, micWave: new Float32Array(96), spkQ: [] };
     function _rms(f32) {
@@ -405,6 +406,12 @@
       cx2.shadowBlur = 0;
       cx2.font = `700 ${W * 0.042}px Consolas, Menlo, monospace`;
       cx2.fillStyle = sc; cx2.fillText(label, c, c + rc * 0.34);
+      if (core.mood && !live) {            // HABIBI's own feeling, in its colour
+        cx2.font = `700 ${W * 0.034}px Consolas, Menlo, monospace`;
+        cx2.fillStyle = core.mood.color; cx2.shadowColor = core.mood.color; cx2.shadowBlur = 10;
+        cx2.fillText('♥ ' + core.mood.label, c, c + rc * 0.62);
+        cx2.shadowBlur = 0;
+      }
       drawWave(s, sp, amp, live ? sc : pri);
       requestAnimationFrame(drawCore);
     }
@@ -469,8 +476,15 @@
       if (m.type === 'wake')          sys('Wake word detected — connecting…');
       if (m.type === 'sys')           sys(m.text);
       if (m.type === 'file_received') _onFileReceived(m);
+      if (m.type === 'mood')          setMood(m);
     };
 
+    function setMood(m) {
+      core.mood = { label: m.label, color: m.color };
+      const el = document.getElementById('moodTxt');
+      el.textContent = m.label; el.style.color = m.color;
+      el.style.textShadow = `0 0 8px ${m.color}`;
+    }
     function setPill(cls, text) { pill.className = 'tag ' + cls; stTxt.textContent = text; }
     function setStatus(s) {
       if (s === 'active') { core.state = 'ACTIVE';   setPill('on', 'ACTIVE');      wake.classList.remove('show'); }
