@@ -1,14 +1,16 @@
 """
-ui_youtube.py — YouTube inside Habibi's media player.
+plugins/youtube_player.py — YouTube videos and playlists inside Habibi's media player.
 
-Uses YouTube's official embedded player (IFrame Player API) in a built-in web
-view, so videos and playlists play inside Habibi's window — no separate
-browser — while staying within YouTube's terms (no downloading, ads and
-creator settings respected). Videos whose owner disabled embedding can't play
-here; Habibi says so and skips them in a playlist.
+A drop-in plugin (switch it off in ⚙ PLUGINS). It uses YouTube's official
+embedded player (IFrame Player API) in a built-in web view, so videos and
+playlists play inside Habibi — no separate browser — within YouTube's terms:
+no downloading and no ad blocking. Sign in to YouTube once (▶ YT → Sign in);
+with YouTube Premium, videos play without ads. The login is remembered in
+config/youtube_profile/ on this PC only.
 
-Controlled by the same sidebar card and voice commands as local files
-(ui_media.MediaEngine delegates to YouTubePlayer while mode == "youtube").
+UI: setup_ui() adds a ▶ YT button to the MEDIA PLAYER card and a view to its
+video page; the card's play/pause/next/seek/volume buttons, the playlist and
+the RGB colours all work with it (ui_media external-source API).
 """
 from __future__ import annotations
 
@@ -16,9 +18,21 @@ import json
 import re
 from urllib.parse import parse_qs, urlparse
 
+import sys
+import threading
+from pathlib import Path
+
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
 
 _ORIGIN = "https://habibi.local"
+_SIGN_IN_URL = ("https://accounts.google.com/ServiceLogin?service=youtube&hl=en"
+                "&continue=https%3A%2F%2Fwww.youtube.com%2F")
+
+
+def _base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent.parent
 
 _HTML = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="referrer" content="strict-origin-when-cross-origin">
@@ -126,9 +140,19 @@ class YouTubePlayer(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        from PyQt6.QtWebEngineCore import QWebEngineSettings
+        from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
         from PyQt6.QtWebEngineWidgets import QWebEngineView
+        self.name, self.tag = "YouTube", "YT"
+        # A saved profile keeps your YouTube sign-in (Premium = no ads) between runs
+        store = _base_dir() / "config" / "youtube_profile"
+        store.mkdir(parents=True, exist_ok=True)
+        self.profile = QWebEngineProfile("habibi-youtube", self)
+        self.profile.setPersistentStoragePath(str(store / "storage"))
+        self.profile.setCachePath(str(store / "cache"))
+        self.profile.setPersistentCookiesPolicy(
+            QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
         self.view = QWebEngineView()
+        self.view.setPage(QWebEnginePage(self.profile, self.view))
         st = self.view.settings()
         st.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
         st.setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, True)
@@ -258,11 +282,66 @@ class YouTubePlayer(QObject):
                     pass
             if got:
                 self.titles_ready.emit()
-        import threading
         threading.Thread(target=_run, daemon=True).start()
 
     def playing(self) -> bool:
         return self.s.get("state") in (1, 3)
+
+    def loading(self) -> bool:
+        return self.s.get("state") == 3 or not self.s.get("title")
+
+    def position_ms(self) -> int:
+        return int(self.s.get("pos", 0) * 1000)
+
+    def item_titles(self) -> list[str]:
+        ids = list(self.s.get("list") or [])
+        if ids:
+            self.fetch_titles(ids)
+            return [self.titles.get(v, v) for v in ids]
+        return [self.title()] if self.title() else []
+
+    def link(self) -> str:
+        v = self.s.get("id", "")
+        return f"https://www.youtube.com/watch?v={v}" if v else "https://www.youtube.com/"
+
+    # ── sign-in (YouTube Premium → no ads) ───────────────────────────────────
+    def sign_in(self, parent=None) -> None:
+        """A small window with Google's own sign-in page, using the same saved
+        profile as the player. Habibi never sees your password."""
+        from PyQt6.QtWebEngineCore import QWebEnginePage
+        from PyQt6.QtWebEngineWidgets import QWebEngineView
+        from PyQt6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout
+        dlg = QDialog(parent)
+        dlg.setWindowTitle("Sign in to YouTube")
+        dlg.resize(520, 720)
+        lay = QVBoxLayout(dlg)
+        info = QLabel("Sign in with your Google account. With YouTube Premium, videos in "
+                      "Habibi play without ads. Close this window when you're done.")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        web = QWebEngineView(dlg)
+        web.setPage(QWebEnginePage(self.profile, web))
+        web.load(QUrl(_SIGN_IN_URL))
+        lay.addWidget(web, 1)
+        done = QPushButton("DONE")
+        done.clicked.connect(dlg.accept)
+        lay.addWidget(done)
+        dlg.finished.connect(self._after_sign_in)
+        dlg.show()
+        self._sign_in_dlg = dlg
+
+    def _after_sign_in(self, *_):
+        if self._loaded:                 # reload so the player picks up the login
+            self._loaded = False
+            self._ensure_page()
+        self.changed.emit()
+
+    def sign_out(self) -> None:
+        self.profile.cookieStore().deleteAllCookies()
+        self.profile.clearHttpCache()
+        if self._loaded:
+            self._loaded = False
+            self._ensure_page()
 
     def paused(self) -> bool:
         return self.s.get("state") == 2
@@ -285,3 +364,118 @@ class YouTubePlayer(QObject):
         pl = f", playlist video {self.index() + 1} of {self.count()}" if self.count() > 1 else ""
         return (f"{st} on YouTube: {self.title() or 'loading…'}{pl}, "
                 f"{pos // 60}:{pos % 60:02d} / {dur // 60}:{dur % 60:02d}, volume {self._vol}%.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Plugin glue
+# ══════════════════════════════════════════════════════════════════════════════
+
+_yt: YouTubePlayer | None = None
+
+
+def setup_ui(player) -> None:
+    """Runs once on the Qt thread: attach YouTube to the built-in media player."""
+    global _yt
+    engine = getattr(player, "media_engine", None)
+    card = getattr(player, "media_card", None)
+    if engine is None or card is None or _yt is not None:
+        return
+    _yt = YouTubePlayer(engine)
+    player.add_media_view(_yt.view)
+    engine.attach_source(_yt)
+
+    from PyQt6.QtWidgets import QInputDialog, QMenu
+    btn = card.add_source_button("▶ YT", "YouTube: play a link or search, sign in (Premium = no ads)",
+                                 lambda: None, 44)
+    menu = QMenu(btn)
+
+    def _ask():
+        text, ok = QInputDialog.getText(card, "YouTube", "Paste a YouTube video or playlist link, "
+                                                         "or type what to search for:")
+        text = (text or "").strip()
+        if not ok or not text:
+            return
+        target = parse_link(text)
+        if target:
+            engine.play_external(target)
+            return
+        card.now.setText("Searching YouTube…")
+
+        def _search():                       # network off the Qt thread
+            try:
+                t = search(text, playlist="playlist" in text.lower())
+            except Exception:
+                t = {}
+            player.run_in_ui(lambda: engine.play_external(t) if t else
+                             card.now.setText("Nothing found on YouTube."))
+        threading.Thread(target=_search, daemon=True).start()
+
+    menu.addAction("▶  Play a link or search…", _ask)
+    menu.addAction("👤  Sign in to YouTube (Premium = no ads)", lambda: _yt.sign_in(card.window()))
+    menu.addAction("⎋  Sign out of YouTube", _yt.sign_out)
+    btn.setMenu(menu)
+
+
+PLUGIN = {
+    "name": "youtube_player",
+    "description": (
+        "Play YouTube videos or playlists INSIDE Habibi's media player (left sidebar), not in a "
+        "browser. Use for 'play X on YouTube', a YouTube link, 'play a lofi playlist on YouTube'. "
+        "action=play with link (video/playlist URL) or query (+ playlist=true to find a playlist); "
+        "action=sign_in opens Google's sign-in so a YouTube Premium account plays without ads; "
+        "action=sign_out. Pause/next/seek/volume afterwards → media_player. It cannot download "
+        "videos or block ads (YouTube's terms)."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "action": {"type": "STRING", "description": "play | sign_in | sign_out"},
+            "link": {"type": "STRING", "description": "play: a YouTube video or playlist URL"},
+            "query": {"type": "STRING", "description": "play: what to search for on YouTube"},
+            "playlist": {"type": "BOOLEAN", "description": "play with query: find a playlist instead of one video"},
+        },
+        "required": [],
+    },
+}
+
+
+def run(parameters: dict, player=None, session_memory=None) -> str:
+    p = parameters or {}
+    action = str(p.get("action", "play") or "play").lower().strip()
+    if player is None or not hasattr(player, "run_in_ui"):
+        return "YouTube playback needs the Habibi window."
+    if _yt is None:
+        try:
+            player.run_in_ui(lambda: setup_ui(player))
+        except Exception as e:
+            return f"The YouTube player couldn't start: {e}"
+    if _yt is None:
+        return "The YouTube player isn't available on this PC (Qt WebEngine missing)."
+    engine = player.media_engine
+    try:
+        if action == "sign_in":
+            player.run_in_ui(lambda: _yt.sign_in(player.media_card.window()))
+            return ("I opened YouTube's sign-in window. Sign in with your Google account; "
+                    "with YouTube Premium, videos here play without ads.")
+        if action == "sign_out":
+            player.run_in_ui(_yt.sign_out)
+            return "Signed out of YouTube in Habibi's player."
+        link = str(p.get("link", "") or "").strip()
+        query = str(p.get("query", "") or "").strip()
+        target = parse_link(link) if link else {}
+        if link and not target:
+            return "That isn't a YouTube video or playlist link."
+        if not target and query:
+            target = search(query, playlist=bool(p.get("playlist", False)))
+        if not target:
+            return "Nothing found on YouTube for that." if query else "Tell me a YouTube link or what to search for."
+        player.run_in_ui(lambda: engine.play_external(target))
+        kind = "playlist" if target.get("list") else "video"
+        if player:
+            try:
+                player.write_log(f"HABIBI: YouTube {kind} → media player")
+            except Exception:
+                pass
+        return f"Playing the YouTube {kind} in Habibi's media player."
+    except Exception as e:
+        return f"YouTube failed: {e}"

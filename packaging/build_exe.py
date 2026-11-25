@@ -95,7 +95,7 @@ def main() -> None:
     for src, dest in data:
         if (ROOT / src).exists():
             args += ["--add-data", f"{ROOT / src}{sep}{dest}"]
-    for mod in ("ui_media", "ui_youtube", "PyQt6.QtMultimedia", "PyQt6.QtMultimediaWidgets",
+    for mod in ("ui_media", "PyQt6.QtMultimedia", "PyQt6.QtMultimediaWidgets",
                 "PyQt6.QtWebEngineWidgets", "PyQt6.QtWebEngineCore"):   # built-in media player
         args += ["--hidden-import", mod]
     hidden = third_party_imports()

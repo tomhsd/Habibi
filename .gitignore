@@ -89,3 +89,4 @@ config/macros/
 smoke_results.json
 media_selftest.png
 youtube_selftest_*.png
+config/youtube_profile/

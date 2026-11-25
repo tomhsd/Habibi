@@ -1,5 +1,5 @@
 """
-Real Windows test of YouTube inside Habibi's media player (ui_youtube.py):
+Real Windows test of the youtube_player plugin (YouTube inside the media player):
 plays a video and a playlist in the official embedded player, controls them
 from the sidebar commands, and checks the RGB colours follow YouTube audio
 when the video page is hidden.
@@ -24,7 +24,7 @@ os.chdir(ROOT)
 import ui  # noqa: E402  (loads Qt WebEngine before the QApplication exists)
 from PyQt6.QtCore import QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
-import ui_youtube  # noqa: E402
+from core.plugin_loader import discover_plugins  # noqa: E402
 
 app = QApplication(sys.argv)
 win = ui.MainWindow("")
@@ -50,15 +50,23 @@ def wait(cond, secs):
     return False
 
 
+reg = discover_plugins(ROOT / "plugins", set(), logger=print)
+plug = lambda **p: reg.run("youtube_player", p, player=wrap)
+
+
 def script():
     time.sleep(1)
-    yt = getattr(win, "_yt", None)
-    check("YouTube player built", yt is not None, "")
+    check("plugin loaded", reg.has("youtube_player"), [r.name for r in reg._all_records])
+    reg.run_ui_setup(wrap)
+    yt_mod = sys.modules.get("plugins.youtube_player")
+    yt = getattr(yt_mod, "_yt", None)
+    check("plugin attached to the media player (setup_ui)", yt is not None and win._media.src is yt, "")
     if yt is None:
         QTimer.singleShot(0, app.quit); return
-    check("link parsing", ui_youtube.parse_link("https://youtu.be/M7lc1UVf-VE") == {"id": "M7lc1UVf-VE"}, "")
-    r = wrap.media("youtube", target={"id": "M7lc1UVf-VE"})       # YouTube's own IFrame API demo video
-    check("youtube command", "Playing the YouTube video" in r, r)
+    check("▶ YT button on the card", any(b.text() == "▶ YT" for b in win._media_card.findChildren(type(win._media_card.b_play))), "")
+    check("link parsing", yt_mod.parse_link("https://youtu.be/M7lc1UVf-VE") == {"id": "M7lc1UVf-VE"}, "")
+    r = plug(action="play", link="https://www.youtube.com/watch?v=M7lc1UVf-VE")   # YouTube's IFrame API demo video
+    check("plugin play command", "Playing the YouTube video" in r, r)
     ok = wait(lambda: yt.playing() and yt.s.get("dur", 0) > 0, 40)
     check("video plays in Habibi", ok, yt.s)
     check("title known", bool(yt.title()), yt.title())
@@ -73,14 +81,9 @@ def script():
     check("pause", ok, wrap.media("status"))
     win.grab().save("youtube_selftest_video.png")
 
-    try:
-        target = ui_youtube.search("lofi hip hop playlist", playlist=True)
-    except Exception as e:
-        target = {}
-        print("search error", e)
-    check("playlist search", bool(target.get("list")), target)
-    if target.get("list"):
-        wrap.media("youtube", target=target)
+    r = plug(action="play", query="lofi hip hop", playlist=True)
+    check("playlist search + play", "Playing the YouTube playlist" in r, r)
+    if "playlist" in r:
         ok = wait(lambda: len(yt.s.get("list") or []) > 1 and yt.playing(), 40)
         check("playlist imported", ok, f"{len(yt.s.get('list') or [])} videos")
         i0 = yt.index()
@@ -91,6 +94,7 @@ def script():
         check("playlist titles listed", win._media_card.listw.count() > 1, win._media_card.listw.count())
         r = wrap.media("list")
         check("list command", "YouTube playlist" in r, r[:200])
+        check("profile saved for sign-in", (ROOT / "config" / "youtube_profile").exists(), "")
         # hide the video → RGB follows the YouTube audio
         QTimer.singleShot(0, lambda: win._media_card.b_vid.setChecked(False))
         seen = set()

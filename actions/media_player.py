@@ -123,21 +123,6 @@ def media_player(parameters: dict, player=None) -> str:
             if b:
                 return f"'{b}' is a blocked folder, so I won't open files from it."
         return player.media("play", paths=targets, append=(action == "add"))
-    if action == "youtube":
-        import ui_youtube
-        link = str(p.get("link", "") or "").strip()
-        query = str(p.get("query", "") or "").strip()
-        target = ui_youtube.parse_link(link) if link else {}
-        if link and not target:
-            return "That isn't a YouTube video or playlist link."
-        if not target and query:
-            try:
-                target = ui_youtube.search(query, playlist=bool(p.get("playlist", False)))
-            except Exception as e:
-                return f"YouTube search failed: {e}"
-        if not target:
-            return "Nothing found on YouTube for that."
-        return player.media("youtube", target=target)
     if action in ("pause", "resume", "toggle", "stop", "next", "previous", "status", "list"):
         return player.media(action)
     if action == "seek":
@@ -153,16 +138,15 @@ def media_player(parameters: dict, player=None) -> str:
         return player.media("rgb", on=bool(p.get("on", True)))
     if action == "play_index":
         return player.media("play_index", index=int(p.get("index", 1)))
-    return "Unknown action. Use play, add, youtube, pause, resume, stop, next, previous, seek, volume, shuffle, repeat, rgb, list, play_index or status."
+    return "Unknown action. Use play, add, pause, resume, stop, next, previous, seek, volume, shuffle, repeat, rgb, list, play_index or status."
 
 
 TOOL = {
     "name": "media_player",
     "description": (
         "Habibi's BUILT-IN audio/video player (left sidebar, plays inside Habibi, no browser). Use it "
-        "to play music, songs, videos or movies FROM THEIR PC, and to play YouTube videos or "
-        "playlists inside Habibi: youtube(link) for a YouTube URL, or youtube(query, playlist=true/false) "
-        "to search. It cannot download YouTube videos (YouTube's terms forbid it). "
+        "to play music, songs, videos or movies FROM THEIR PC, and to pause/next/seek/volume whatever "
+        "the player is playing (also YouTube started by the youtube_player plugin). "
         "play(query) searches Music/Videos/Downloads/Desktop/Documents and other drives by file or "
         "folder name ('my music' = the Music folder); play(path) plays an exact file or folder; "
         "add = append to the playlist. Then pause, resume, stop, next, previous, seek(seconds, "
@@ -172,11 +156,9 @@ TOOL = {
     "parameters": {
         "type": "OBJECT",
         "properties": {
-            "action": {"type": "STRING", "description": "play | add | youtube | pause | resume | stop | next | previous | seek | volume | shuffle | repeat | rgb | list | play_index | status"},
+            "action": {"type": "STRING", "description": "play | add | pause | resume | stop | next | previous | seek | volume | shuffle | repeat | rgb | list | play_index | status"},
             "query": {"type": "STRING", "description": "play/add: words from the file or folder name, e.g. 'arijit', 'interstellar', 'my music'"},
             "path": {"type": "STRING", "description": "play/add: exact file or folder path"},
-            "link": {"type": "STRING", "description": "youtube: a YouTube video or playlist URL"},
-            "playlist": {"type": "BOOLEAN", "description": "youtube with query: find a playlist instead of a single video"},
             "seconds": {"type": "NUMBER", "description": "seek: position in seconds, or the jump if relative (negative = back)"},
             "relative": {"type": "BOOLEAN", "description": "seek/volume: change by this amount instead of setting it"},
             "volume": {"type": "INTEGER", "description": "volume: 0-100 (or the change if relative)"},

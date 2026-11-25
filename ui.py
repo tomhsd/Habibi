@@ -19,7 +19,7 @@ if platform.system() == "Windows":
 else:
     _WIN_HIDE: dict = {}
 
-try:   # must load before the QApplication exists (YouTube in the media player)
+try:   # must load before the QApplication exists (plugins that use web views, e.g. YouTube)
     import PyQt6.QtWebEngineWidgets  # noqa: F401
 except Exception:
     pass
@@ -4004,6 +4004,7 @@ class MainWindow(QMainWindow):
     _confirm_hide_sig = pyqtSignal()
     _wake_dl_sig    = pyqtSignal(bool, str)  # wake-word install finished (ok, message)
     _media_sig      = pyqtSignal(object)     # (cmd, args, holder, event) from the AI → media player
+    _ui_call_sig    = pyqtSignal(object)     # (fn, holder, event): run fn on the Qt thread (plugins)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -4173,6 +4174,7 @@ class MainWindow(QMainWindow):
         self._clipboard_sig.connect(self._show_clipboard_panel)
         self._wake_dl_sig.connect(self._on_wake_install_done)
         self._media_sig.connect(self._on_media_cmd)
+        self._ui_call_sig.connect(self._on_ui_call)
         self._cam_stop = threading.Event()
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
@@ -4774,16 +4776,8 @@ class MainWindow(QMainWindow):
             self._video = QVideoWidget()
             self._video.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
             self._media.player.setVideoOutput(self._video)
-            self._video_stack = QStackedWidget()        # 0 = local video, 1 = YouTube
+            self._video_stack = QStackedWidget()        # 0 = local video, then plugin views
             self._video_stack.addWidget(self._video)
-            try:
-                import ui_youtube
-                self._yt = ui_youtube.YouTubePlayer(self)
-                self._video_stack.addWidget(self._yt.view)
-                self._media.attach_youtube(self._yt)
-            except Exception as e:
-                self._yt = None
-                print(f"[Media] YouTube unavailable: {e}")
             v.addWidget(self._video_stack, 1)
             bar = QHBoxLayout()
             bar.setContentsMargins(8, 4, 8, 4)
@@ -4809,8 +4803,13 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"[Media] video unavailable: {e}")
 
+    def add_media_view(self, widget) -> None:
+        """For plugins (external media sources): a view shown in the video page."""
+        if self._video_stack.indexOf(widget) < 0:
+            self._video_stack.addWidget(widget)
+
     def _toggle_media_fullscreen(self) -> None:
-        if self._media.is_youtube():
+        if self._media.is_external():
             self._toggle_fullscreen()                    # the whole window (web view can't go solo)
         else:
             self._video.setFullScreen(not self._video.isFullScreen())
@@ -4819,7 +4818,12 @@ class MainWindow(QMainWindow):
         if self._hud_cam_stack.currentIndex() == 1:      # camera has priority
             self._media.video_on_screen = False
             return
-        self._video_stack.setCurrentIndex(1 if self._media.is_youtube() else 0)
+        src = self._media.src if self._media.is_external() else None
+        view = getattr(src, "view", None)
+        if view is not None and self._video_stack.indexOf(view) >= 0:
+            self._video_stack.setCurrentWidget(view)
+        else:
+            self._video_stack.setCurrentIndex(0)
         if on:
             self._hud_cam_stack.setCurrentIndex(2)
         elif self._hud_cam_stack.currentIndex() == 2:
@@ -4827,6 +4831,15 @@ class MainWindow(QMainWindow):
                 self._video.setFullScreen(False)
             self._hud_cam_stack.setCurrentIndex(0)
         self._media.video_on_screen = self._hud_cam_stack.currentIndex() == 2
+
+    def _on_ui_call(self, payload) -> None:
+        fn, holder, ev = payload
+        try:
+            holder["r"] = fn()
+        except Exception as e:
+            holder["e"] = e
+        finally:
+            ev.set()
 
     def _on_media_cmd(self, payload) -> None:
         cmd, args, holder, ev = payload
@@ -6208,6 +6221,33 @@ class HabibiUI:
     @on_audio_device_change.setter
     def on_audio_device_change(self, cb):
         self._win.on_audio_device_change = cb
+
+    def run_in_ui(self, fn, timeout: float = 15.0):
+        """Run fn() on the Qt thread and return its result (for plugins that
+        build or touch widgets from their worker thread)."""
+        if threading.current_thread() is threading.main_thread():
+            return fn()
+        holder: dict = {}
+        ev = threading.Event()
+        self._win._ui_call_sig.emit((fn, holder, ev))
+        if not ev.wait(timeout):
+            raise TimeoutError("The window didn't respond.")
+        if "e" in holder:
+            raise holder["e"]
+        return holder.get("r")
+
+    @property
+    def media_engine(self):
+        """The built-in player's engine (ui_media.MediaEngine) or None."""
+        return getattr(self._win, "_media", None)
+
+    @property
+    def media_card(self):
+        """The MEDIA PLAYER sidebar card (ui_media.MediaCard) or None."""
+        return getattr(self._win, "_media_card", None)
+
+    def add_media_view(self, widget) -> None:
+        self._win.add_media_view(widget)
 
     def media(self, cmd: str, **args) -> str:
         """Thread-safe: control the built-in media player from an action thread."""

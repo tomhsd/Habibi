@@ -33,6 +33,7 @@ class PluginRecord:
     valid: bool = False
     error: str = ""
     settings: Optional[dict] = None   # optional PLUGIN_SETTINGS schema (config fields)
+    ui_setup: Optional[Callable] = None   # optional setup_ui(player): runs once on the Qt thread
 
 
 class PluginRegistry:
@@ -69,6 +70,25 @@ class PluginRegistry:
             self._logger(f"Plugin '{name}' crashed during run(): {e}")
             traceback.print_exc()
             return f"Sir, the '{name}' plugin failed: {e}"
+
+    # -- called by main.py once the window exists --
+    def run_ui_setup(self, player) -> None:
+        """Call each enabled plugin's optional setup_ui(player) on the Qt thread,
+        so a plugin can add buttons or views to the interface. Never raises."""
+        if player is None:
+            return
+        for name, rec in self._plugins.items():
+            if rec.ui_setup is None or not get_plugin_enabled(name):
+                continue
+            try:
+                runner = getattr(player, "run_in_ui", None)
+                if runner is not None:
+                    runner(lambda f=rec.ui_setup: f(player))
+                else:
+                    rec.ui_setup(player)
+            except Exception as e:
+                self._logger(f"Plugin '{name}' setup_ui failed: {e}")
+                traceback.print_exc()
 
     # -- called by ui.py's settings tab to render per-plugin config forms --
     def settings_schemas(self) -> list[dict]:
@@ -158,8 +178,13 @@ def _validate(module, filename: str) -> PluginRecord:
     if not (isinstance(settings, dict) and isinstance(settings.get("fields"), list)):
         settings = None
 
+    ui_setup = getattr(module, "setup_ui", None)
+    if not callable(ui_setup):
+        ui_setup = None
+
     return PluginRecord(name=name, description=description.strip(), parameters=parameters,
-                         run=run_fn, file=filename, valid=True, error="", settings=settings)
+                         run=run_fn, file=filename, valid=True, error="", settings=settings,
+                         ui_setup=ui_setup)
 
 
 def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
