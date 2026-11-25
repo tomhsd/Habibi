@@ -53,10 +53,11 @@ def describe_change(before, wait: float | None = None) -> str:
     t0, img0 = before
     t1, img1 = snapshot()
     changed_title = t0 != t1
-    diff = float(np.abs(img1 - img0).mean()) if img0 is not None and img1 is not None else -1.0
+    # largest change in any of the 18×32 screen cells — catches small changes like typed words
+    diff = float(np.abs(img1 - img0).max()) if img0 is not None and img1 is not None else -1.0
     if changed_title:
         return f"✓ Screen changed — front window is now '{t1}'."
-    if diff > 1.5:
+    if diff > 10.0:            # > blinking caret (~6), < a few typed characters (~17+)
         return f"✓ Screen changed (window '{t1}')."
     if diff < 0:
         return f"(Could not check the screen. Front window: '{t1}'.)"

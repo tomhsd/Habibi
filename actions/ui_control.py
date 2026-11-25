@@ -171,6 +171,27 @@ def _main_editable(win):
     return best
 
 
+def _value(el) -> str:
+    """The text inside a field (not its label)."""
+    for getter in ("get_value",):
+        try:
+            v = getattr(el, getter)()
+            if v:
+                return str(v)
+        except Exception:
+            pass
+    try:
+        v = el.iface_value.CurrentValue
+        if v:
+            return str(v)
+    except Exception:
+        pass
+    try:
+        return el.legacy_properties().get("Value", "") or ""
+    except Exception:
+        return ""
+
+
 def _escape_keys(text: str) -> str:
     out = []
     for ch in text:
@@ -295,7 +316,11 @@ def _type(win, text: str, field: str, clear: bool, enter: bool) -> str:
         if enter:
             from pywinauto.keyboard import send_keys
             send_keys("{ENTER}")
-        where = f"'{field}'" if field else "the focused field"
+        where = f"'{field}'" if field else "the text box"
+        if target is not None and text.strip():
+            time.sleep(0.2)
+            if text.strip()[:30] in _value(target):
+                return f"Typed {len(text)} characters into {where}. ✓ Checked: the text is there."
         return f"Typed {len(text)} characters into {where}. " + A.describe_change(before)
 
     return safety.guarded("input", "Type text", text[:80], _do)
@@ -306,18 +331,17 @@ def _read(win, field: str) -> str:
         el = _find(win, field, "")
         if el is None:
             return f"No '{field}' found."
-        for getter in ("get_value", "window_text"):
-            try:
-                v = getattr(el, getter)()
-                if v:
-                    return f"{field}: {v}"[:3000]
-            except Exception:
-                pass
-        return f"'{field}' is empty."
+        v = _value(el) or _info(el)[0]
+        return f"{field}: {v}"[:3000] if v else f"'{field}' is empty."
     parts = []
     for el in _walk(win):
         n, ct, _ = _info(el)
-        if ct in ("Text", "Edit", "Document", "ListItem", "DataItem", "Hyperlink", "Button") and n:
+        if ct in ("Edit", "Document"):
+            v = _value(el)
+            if v:
+                parts.append(f"[{n or ct}] {v}")
+                continue
+        if ct in ("Text", "ListItem", "DataItem", "Hyperlink", "Button") and n:
             parts.append(n)
         if sum(len(p) for p in parts) > 3000:
             break
