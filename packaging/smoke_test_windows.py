@@ -132,6 +132,20 @@ time.sleep(0.5)
 check("…Bangla text arrived intact", lambda: ("আমি-ঠিক-আছি" in (r := run("ui_control", action="read", window="Notepad")), r[-200:]))
 hud.destroy()
 
+# plugin manager: install / reload / remove with no restart (temp folder, not the real one)
+import tempfile  # noqa: E402
+_pd = Path(tempfile.mkdtemp()); _src = Path(tempfile.mkdtemp())
+(_src / "demo_plug.py").write_text(
+    'PLUGIN={"name":"demo_plug","description":"demo","parameters":{"type":"OBJECT","properties":{}}}\n'
+    'def run(parameters): return "demo-ok"\n', encoding="utf-8")
+(_src / "broken_plug.py").write_text("x = \n", encoding="utf-8")
+_reg = discover_plugins(_pd, reg.names(), logger=lambda m: None)
+check("plugin install loads it at once", lambda: (_reg.install(str(_src / "demo_plug.py"))["ok"] and _reg.run("demo_plug", {}) == "demo-ok", ""))
+check("broken plugin refused, folder unchanged", lambda: (not _reg.install(str(_src / "broken_plug.py"))["ok"] and not (_pd / "broken_plug.py").exists(), ""))
+(_pd / "dropped_in.py").write_text((_src / "demo_plug.py").read_text().replace("demo_plug", "dropped_in"), encoding="utf-8")
+check("reload picks up a copied-in file", lambda: ("dropped_in" in _reg.reload()["added"] and _reg.has("dropped_in"), ""))
+check("remove takes it out at once", lambda: (_reg.remove("demo_plug.py")["ok"] and not _reg.has("demo_plug") and (_pd / "_removed").is_dir(), ""))
+
 np.kill()
 probe.unlink(missing_ok=True)
 failed = [n for n, ok, _ in results if not ok]

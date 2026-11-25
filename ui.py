@@ -2887,12 +2887,15 @@ class SafetyOverlay(QWidget):
 
 
 class PluginManagerOverlay(QWidget):
-    """Floating overlay — lists discovered plugins with per-plugin ON/OFF toggles."""
+    """Floating overlay — plugins with ON/OFF, ➕ install, ↻ reload and 🗑 remove.
+    Everything takes effect at once; no restart."""
 
-    _OW = 420
+    _OW = 460
 
-    def __init__(self, plugins: list[dict], parent=None):
+    def __init__(self, plugins: list[dict], parent=None, get_plugins=None, admin=None):
         super().__init__(parent)
+        self._get_plugins = get_plugins
+        self._admin = admin
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(f"""
             PluginManagerOverlay {{
@@ -2902,10 +2905,42 @@ class PluginManagerOverlay(QWidget):
             }}
         """)
         self.setFixedWidth(self._OW)
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(20, 16, 20, 16)
+        self._lay.setSpacing(6)
+        self._rebuild(plugins)
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 16, 20, 16)
-        lay.setSpacing(6)
+    def _small_btn(self, text, tip, cb, w=0):
+        b = QPushButton(text)
+        b.setFixedHeight(26)
+        if w:
+            b.setFixedWidth(w)
+        b.setFont(_mono(8))
+        b.setToolTip(tip)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_MED};
+                border: 1px solid {C.BORDER}; border-radius: 3px; padding: 0 8px;
+            }}
+            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+        """)
+        b.clicked.connect(cb)
+        return b
+
+    def _clear(self, lay):
+        while lay.count():
+            it = lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+            elif it.layout() is not None:
+                self._clear(it.layout())
+
+    def _rebuild(self, plugins: list[dict], status: str = ""):
+        lay = self._lay
+        self._clear(lay)
 
         hdr = QLabel("🧩  PLUGIN MANAGER")
         hdr.setFont(_mono(12, True))
@@ -2914,6 +2949,20 @@ class PluginManagerOverlay(QWidget):
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
         lay.addWidget(sep)
+
+        tools = QHBoxLayout(); tools.setSpacing(6)
+        if self._admin:
+            tools.addWidget(self._small_btn("➕ INSTALL", "Pick a plugin .py file and load it now", self._pick_install))
+            tools.addWidget(self._small_btn("↻ RELOAD", "Re-scan the plugins folder (picks up files you copied in)", self._reload))
+        tools.addStretch(1)
+        lay.addLayout(tools)
+
+        if status:
+            st = QLabel(status)
+            st.setFont(_mono(8))
+            st.setWordWrap(True)
+            st.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+            lay.addWidget(st)
 
         if not plugins:
             empty = QLabel("No plugins found in /plugins.")
@@ -2939,6 +2988,28 @@ class PluginManagerOverlay(QWidget):
         close_btn.clicked.connect(self.hide)
         lay.addWidget(close_btn)
         self.adjustSize()
+
+    def _after(self, res: dict):
+        plugins = self._get_plugins() if self._get_plugins else []
+        icon = "✓ " if res.get("ok") else "⚠ "
+        self._rebuild(plugins, icon + str(res.get("message", "")))
+
+    def _pick_install(self):
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a plugin file", "", "Python plugin (*.py)")
+        if path:
+            self._after(self._admin("install", path))
+
+    def _reload(self):
+        self._after(self._admin("reload", ""))
+
+    def _remove(self, name: str):
+        from PyQt6.QtWidgets import QMessageBox
+        ok = QMessageBox.question(
+            self, "Remove plugin",
+            f"Remove '{name}'?\nIts file moves to plugins/_removed/, so it can be restored by hand.")
+        if ok == QMessageBox.StandardButton.Yes:
+            self._after(self._admin("remove", name))
 
     def _build_row(self, p: dict) -> QHBoxLayout:
         row = QHBoxLayout(); row.setSpacing(6)
@@ -2968,6 +3039,8 @@ class PluginManagerOverlay(QWidget):
             self._style_toggle(btn, p["enabled"])
             btn.clicked.connect(lambda _, name=p["name"], b=btn: self._toggle(name, b))
         row.addWidget(btn)
+        if self._admin:
+            row.addWidget(self._small_btn("🗑", "Remove this plugin", lambda _=False, n=p["file"]: self._remove(n), 30))
         return row
 
     def _style_toggle(self, btn: QPushButton, enabled: bool):
@@ -4039,6 +4112,7 @@ class MainWindow(QMainWindow):
         self.on_audio_device_change = None  # callable: () -> None — reopen audio streams
         self._confirm_overlay  = None   # live ConfirmBanner, if one is on screen
         self.get_plugins       = None   # callable: () -> list[dict], set by HabibiLive
+        self.plugin_admin      = None   # callable: (op, arg) -> {ok, message}; op = install|remove|reload
         self.get_plugin_settings = None # callable: () -> list[dict] settings schemas
         self.on_wake_toggle    = None   # callable: (enable: bool) -> str, set by HabibiLive
         self.on_wake_manual    = None   # callable: () -> None — manual sleep/wake
@@ -5968,7 +6042,8 @@ class MainWindow(QMainWindow):
     def _open_plugin_manager(self):
         plugins = self.get_plugins() if self.get_plugins else []
         cw = self.centralWidget()
-        ov = PluginManagerOverlay(plugins, parent=cw)
+        ov = PluginManagerOverlay(plugins, parent=cw, get_plugins=self.get_plugins,
+                                  admin=self.plugin_admin)
         ov.adjustSize()
         ov.setGeometry((cw.width() - ov.width()) // 2,
                        (cw.height() - ov.height()) // 2,
@@ -6274,6 +6349,14 @@ class HabibiUI:
     @get_plugins.setter
     def get_plugins(self, cb):
         self._win.get_plugins = cb
+
+    @property
+    def plugin_admin(self):
+        return self._win.plugin_admin
+
+    @plugin_admin.setter
+    def plugin_admin(self, cb):
+        self._win.plugin_admin = cb
 
     @property
     def get_plugin_settings(self):
