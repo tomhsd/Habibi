@@ -430,6 +430,9 @@ class HabibiLive:
         self._is_speaking         = False
         self._speaking_lock       = threading.Lock()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
+        # ✋ Talk over Habibi to stop it (core/barge_in.py)
+        from core.barge_in import BargeIn
+        self._barge = BargeIn()
         # 🔒 Voice lock — only the owner's voice reaches the AI (core/voice_lock.py)
         try:
             from core.voice_lock import VoiceLock
@@ -694,6 +697,7 @@ class HabibiLive:
             self._dashboard = DashboardServer()
             self._dashboard.set_connect_callback(self._on_phone_connected)
             self._dashboard.set_alert_callback(lambda m: self.ui.write_log(f"ERR: {m}"))
+            self._dashboard.set_interrupt_callback(self._phone_interrupt)
             asyncio.create_task(self._run_dashboard())
             # Runs for the whole lifetime, not just inside an active session
             asyncio.create_task(self._process_dashboard_commands())
@@ -810,10 +814,32 @@ class HabibiLive:
     def set_speaking(self, value: bool):
         with self._speaking_lock:
             self._is_speaking = value
+        if not value:
+            self._barge.reset()
         if value:
             self.ui.set_state("SPEAKING")
         elif not self.ui.muted:
             self.ui.set_state("LISTENING")
+
+    def _phone_interrupt(self) -> None:
+        with self._speaking_lock:
+            speaking = self._is_speaking
+        if speaking:
+            self.interrupt()
+
+    def _on_barge_in(self) -> None:
+        """The user talked over Habibi: stop speaking and pass on what they said."""
+        with self._speaking_lock:
+            speaking = self._is_speaking
+        if not speaking:
+            return
+        held = self._barge.take_held()
+        self.interrupt()
+        for chunk in held:      # the start of the user's words, so nothing is lost
+            try:
+                self.out_queue.put_nowait({"data": chunk, "mime_type": "audio/pcm"})
+            except Exception:
+                break
 
     def interrupt(self) -> None:
         """Stop HABIBI mid-speech: drain queued audio and open mic immediately."""
@@ -1146,6 +1172,16 @@ class HabibiLive:
                 return
             with self._speaking_lock:
                 habibi_speaking = self._is_speaking
+            # ✋ Barge-in: while Habibi talks, the mic still isn't sent to the AI,
+            # but if the user clearly talks over it, Habibi stops and listens.
+            if (habibi_speaking and not self.ui.muted and not self._phone_active
+                    and getattr(self.ui, "barge_in_enabled", True)):
+                try:
+                    if self._barge.feed(indata.tobytes()):
+                        loop.call_soon_threadsafe(self._on_barge_in)
+                except Exception:
+                    pass
+                return
             if not habibi_speaking and not self.ui.muted and not self._phone_active:
                 data = indata.tobytes()
                 loop.call_soon_threadsafe(
@@ -1408,6 +1444,7 @@ class HabibiLive:
                     pass
 
                 try:
+                    self._barge.note_output(bytes(batch), RECEIVE_SAMPLE_RATE)
                     await asyncio.to_thread(stream.write, bytes(batch))
                 except (RuntimeError, asyncio.CancelledError):
                     break   # executor shutting down — exit cleanly

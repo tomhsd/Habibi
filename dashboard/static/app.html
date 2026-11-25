@@ -181,6 +181,9 @@
     .hbtn.grow { flex: 1; }
     #wake { display: none; color: var(--acc2); border-color: color-mix(in srgb, var(--acc2) 50%, transparent); }
     #wake.show { display: flex; }
+    #stopBtn { display: none; color: var(--acc); border-color: color-mix(in srgb, var(--acc) 55%, transparent);
+               animation: mic-pulse 1.2s ease-in-out infinite; }
+    #stopBtn.show { display: flex; }
     #spk-btn.off { color: var(--text-dim); border-color: var(--border); }
     #mic-btn.recording {
       background: color-mix(in srgb, var(--red) 16%, transparent); border-color: var(--red); color: var(--red);
@@ -245,6 +248,7 @@
       <button class="hbtn" id="mic-btn" onclick="doMic()" title="Voice command">🎤 VOICE</button>
       <button class="hbtn" id="spk-btn" onclick="toggleSpeaker()" title="Play HABIBI's voice on this phone">🔊</button>
       <button class="hbtn" id="wake" onclick="doWake()">◉ WAKE</button>
+      <button class="hbtn" id="stopBtn" onclick="doStop()" title="Stop HABIBI talking">■ STOP</button>
       <button class="hbtn send grow" onclick="doSend()">SEND ▸</button>
     </div>
   </footer>
@@ -713,6 +717,32 @@
                      (!!APP && localStorage.getItem('habibi_live') !== 'off');
     function _speakingNow() { return performance.now() < core.speakUntil; }
 
+    // ── Stop HABIBI: STOP button, or just talk over it (phone mic) ───────────
+    function doStop() {
+      _authFetch('/api/interrupt', { method: 'POST' });
+      if (typeof _spkFlush === 'function') _spkFlush();
+      core.speakUntil = 0;
+    }
+    setInterval(() => {
+      document.getElementById('stopBtn').classList.toggle('show', _speakingNow());
+    }, 200);
+    let _bargeMs = 0, _bargeHeld = [];
+    function _phoneBarge(f32, rate) {        // gate=true → don't send (HABIBI is talking)
+      if (!_speakingNow()) { _bargeMs = 0; _bargeHeld = []; return { gate: false }; }
+      const ms = f32.length / rate * 1000, r = _rms(f32);
+      _bargeHeld.push([ms, new Int16Array(_f32toPcm16(f32, rate))]);
+      let tot = _bargeHeld.reduce((a, x) => a + x[0], 0);
+      while (tot > 800 && _bargeHeld.length > 1) tot -= _bargeHeld.shift()[0];
+      _bargeMs = r > 0.05 ? _bargeMs + ms : Math.max(0, _bargeMs - ms);
+      if (_bargeMs >= 280 && localStorage.getItem('habibi_barge') !== 'off') {
+        const held = _bargeHeld.map(x => x[1]);
+        _bargeMs = 0; _bargeHeld = [];
+        doStop(); sys('You spoke — HABIBI stopped.');
+        return { gate: false, held };
+      }
+      return { gate: true };
+    }
+
     function doMic() {
       _voiceWant = !_voiceWant;
       localStorage.setItem('habibi_live', _voiceWant ? 'on' : 'off');
@@ -756,7 +786,9 @@
           let _pbuf = [], _plen = 0;
           nd.port.onmessage = e => {
             lv.mic = Math.max(lv.mic, _rms(e.data)); lv.micWave = _down(e.data, 96);
-            if (_speakingNow()) { _pbuf = []; _plen = 0; return; }   // don't send HABIBI's own voice back
+            const g = _phoneBarge(e.data, rate);
+            if (g.gate) { _pbuf = []; _plen = 0; return; }        // don't send HABIBI's own voice back
+            if (g.held) for (const c of g.held) { _pbuf.push(c); _plen += c.length; }
             const chunk = new Int16Array(_f32toPcm16(e.data, rate));
             _pbuf.push(chunk); _plen += chunk.length;
             if (_plen >= 1024) {
@@ -773,7 +805,7 @@
           sp.onaudioprocess = e => {
             const d = e.inputBuffer.getChannelData(0);
             lv.mic = Math.max(lv.mic, _rms(d)); lv.micWave = _down(d, 96);
-            if (_speakingNow()) return;
+            if (_phoneBarge(d, rate).gate) return;
             if (vws.readyState === 1) vws.send(_f32toPcm16(d, rate));
           };
           src.connect(sp); sp.connect(ctx.destination);

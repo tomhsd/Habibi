@@ -5105,6 +5105,16 @@ class MainWindow(QMainWindow):
         vl_btn.clicked.connect(self._open_voice_lock)
         lay.addWidget(vl_btn)
 
+        self.barge_in_enabled = bool(_read_full_config().get("barge_in", True))
+        self._barge_btn = QPushButton()
+        self._barge_btn.setFixedHeight(26)
+        self._barge_btn.setFont(_mono(7))
+        self._barge_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._barge_btn.setStyleSheet(_BTN_STYLE_DIM)
+        self._barge_btn.clicked.connect(self._toggle_barge_in)
+        self._barge_btn.setText("✋  TALK OVER TO STOP: " + ("ON" if self.barge_in_enabled else "OFF"))
+        lay.addWidget(self._barge_btn)
+
         self._brief_btn = QPushButton()
         self._brief_btn.setFixedHeight(26)
         self._brief_btn.setFont(_mono(7))
@@ -5484,6 +5494,18 @@ class MainWindow(QMainWindow):
         ov.raise_()
         self._remote_overlay = ov
         self._log.append_log(f"SYS: Remote key generated — manual: {manual or url}")
+
+    def _toggle_barge_in(self):
+        self.barge_in_enabled = not self.barge_in_enabled
+        self._barge_btn.setText("✋  TALK OVER TO STOP: " + ("ON" if self.barge_in_enabled else "OFF"))
+        try:
+            data = _read_full_config()
+            data["barge_in"] = self.barge_in_enabled
+            API_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+        except Exception:
+            pass
+        self._log.append_log("SYS: Talk over to stop " + ("ON — just speak while HABIBI talks to stop it."
+                                                          if self.barge_in_enabled else "OFF — use ESC to stop."))
 
     def _open_voice_lock(self):
         old = getattr(self, "_voice_lock_overlay", None)
@@ -5872,6 +5894,10 @@ class HabibiUI:
     @on_interrupt.setter
     def on_interrupt(self, cb):
         self._win.on_interrupt = cb
+
+    @property
+    def barge_in_enabled(self) -> bool:
+        return getattr(self._win, "barge_in_enabled", True)
 
     @property
     def on_voice_lock_cmd(self):

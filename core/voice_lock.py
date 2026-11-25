@@ -33,7 +33,10 @@ MODEL_URL = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/"
              "speaker-recongition-models/" + MODEL_NAME)
 SR = 16000
 THRESHOLDS = {"normal": 0.45, "strict": 0.52}
-DECIDE_AFTER_S = 1.0          # speech needed before deciding
+DECIDE_AFTER_S = 1.0          # speech needed before the first check
+RECHECK_EVERY_S = 0.75        # if the first check fails, listen a bit more and check again…
+MAX_HOLD_S = 3.0              # …up to this much speech (longer audio = surer match)
+MIN_SPEECH_S = 0.3            # shorter than this is treated as a noise
 END_AFTER_SILENCE_S = 1.2     # an utterance ends after this much silence
 MIN_ENROLL_SPEECH_S = 6.0
 
@@ -63,6 +66,7 @@ class VoiceLock:
         self._enroll_until = 0.0
         self._enroll_done = None
         self._last_block_log = 0.0
+        self._adapt_count = 0
 
     # ── setup ────────────────────────────────────────────────────────────────
 
@@ -207,6 +211,7 @@ class VoiceLock:
         self._speech_s = 0.0
         self._silence_s = 0.0
         self._noise = 0.003
+        self._next_check, self._best = DECIDE_AFTER_S, -1.0
 
     async def process(self, data: bytes, loop) -> list[bytes]:
         """Gate one chunk of 16 kHz PCM16 audio. Returns the chunks to send now
@@ -235,6 +240,7 @@ class VoiceLock:
                 return [silent]
             self._state, self._held, self._held_f = "collect", [data], [f]
             self._speech_s, self._silence_s = dur, 0.0
+            self._next_check, self._best = DECIDE_AFTER_S, -1.0
             return []
 
         if self._state == "collect":
@@ -245,23 +251,31 @@ class VoiceLock:
                 self._silence_s = 0.0
             else:
                 self._silence_s += dur
-            enough = self._speech_s >= DECIDE_AFTER_S or (
-                self._silence_s >= 0.5 and self._speech_s >= 0.5)
-            if enough:
+            ended = self._silence_s >= 0.5
+            due = self._speech_s >= self._next_check or (ended and self._speech_s >= MIN_SPEECH_S)
+            if due:
                 audio = np.concatenate(self._held_f)
                 try:
-                    sim = await loop.run_in_executor(None, self.score, audio)
+                    sim = await loop.run_in_executor(None, self._score_and_adapt, audio)
                 except Exception:
                     sim = 1.0             # never lock the owner out on an engine error
-                held, self._held, self._held_f = self._held, [], []
+                self._best = max(self._best, sim)
                 if sim >= self.threshold:
+                    held, self._held, self._held_f = self._held, [], []
                     self._state = "open"
                     return held
-                self._state = "blocked"
+                if not ended and self._speech_s < MAX_HOLD_S:
+                    self._next_check = self._speech_s + RECHECK_EVERY_S   # listen a little more
+                    return []
+                held, self._held, self._held_f = self._held, [], []
+                self._state = "blocked" if not ended else "idle"
+                if ended:
+                    self._reset_utterance()
                 if time.time() - self._last_block_log > 20:
                     self._last_block_log = time.time()
                     self.log(f"SYS: Voice lock — ignored a voice that isn't yours "
-                             f"(match {max(sim, 0) * 100:.0f}%).")
+                             f"(match {max(self._best, 0) * 100:.0f}%, needs "
+                             f"{self.threshold * 100:.0f}%). If that was you, record your voice again.")
                 return [bytes(len(c)) for c in held]
             if self._silence_s >= 0.8:     # just a short noise
                 held = self._held
@@ -279,3 +293,22 @@ class VoiceLock:
     def _reset_utterance(self) -> None:
         self._state, self._held, self._held_f = "idle", [], []
         self._speech_s = self._silence_s = 0.0
+        self._next_check, self._best = DECIDE_AFTER_S, -1.0
+
+    def _score_and_adapt(self, audio: np.ndarray) -> float:
+        """Score an utterance. When it is clearly the owner, nudge the voiceprint
+        towards it, so the lock keeps up with the real mic, room and tone of voice."""
+        e = self._embed(audio)
+        ref = np.asarray(self.cfg["embedding"], dtype=np.float32)
+        sim = float(e @ ref)
+        if sim >= self.threshold + 0.12 and len(audio) >= SR:
+            new = 0.92 * ref + 0.08 * e
+            new /= np.linalg.norm(new) + 1e-9
+            self.cfg["embedding"] = [round(float(x), 6) for x in new]
+            self._adapt_count += 1
+            if self._adapt_count % 5 == 0:
+                try:
+                    self.save()
+                except Exception:
+                    pass
+        return sim

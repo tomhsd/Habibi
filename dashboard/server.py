@@ -528,6 +528,7 @@ class DashboardServer:
         self._locked_until: dict[str, float] = {}
         self._global_fails: list          = []
         self._alert_callback              = None
+        self._interrupt_callback          = None
         self._tokens: set[str]            = set()
         self._token_keys: dict[str, str]  = {}   # auth_token → session_key
         self._aes_cache:  dict[str, bytes]= {}   # session_key → AES bytes
@@ -593,6 +594,9 @@ class DashboardServer:
 
     # ── brute-force protection ───────────────────────────────────────────
     _MAX_FAILS, _FAIL_WINDOW, _LOCK_SECS, _GLOBAL_MAX = 5, 600, 900, 20
+
+    def set_interrupt_callback(self, fn) -> None:
+        self._interrupt_callback = fn
 
     def set_alert_callback(self, fn) -> None:
         self._alert_callback = fn
@@ -892,6 +896,15 @@ class DashboardServer:
                 await self._command_queue.put(text)
                 if self._wake_callback:
                     self._wake_callback()
+            return JSONResponse({"ok": True})
+
+        @app.post("/api/interrupt")
+        async def interrupt_ep(req: Request):
+            """Phone: stop HABIBI mid-sentence (STOP button or talking over it)."""
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if self._interrupt_callback:
+                self._interrupt_callback()
             return JSONResponse({"ok": True})
 
         @app.post("/api/wake")
