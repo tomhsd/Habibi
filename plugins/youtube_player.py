@@ -159,6 +159,9 @@ class YouTubePlayer(QObject):
         self.view.page().fullScreenRequested.connect(lambda r: r.accept())
         self.s: dict = {}
         self._loaded = False
+        self._page_ready = False
+        self._queued: str | None = None      # JS to run once the page has loaded
+        self.view.loadFinished.connect(self._on_page_loaded)
         self._vol = 70
         self._duck = False
         self._last_key = None
@@ -174,7 +177,22 @@ class YouTubePlayer(QObject):
     def _ensure_page(self) -> None:
         if not self._loaded:
             self._loaded = True
+            self._page_ready = False
             self.view.setHtml(_HTML, QUrl(_ORIGIN + "/"))
+
+    def _on_page_loaded(self, ok: bool) -> None:
+        self._page_ready = True
+        if self._queued:
+            js, self._queued = self._queued, None
+            self.view.page().runJavaScript(js)
+
+    def _run_js(self, js: str) -> None:
+        """Run now, or as soon as the player page has loaded (the first load
+        used to be lost because load() didn't exist yet)."""
+        if self._page_ready:
+            self.view.page().runJavaScript(js)
+        else:
+            self._queued = js
 
     def load(self, target: dict) -> None:
         self._ensure_page()
@@ -182,7 +200,7 @@ class YouTubePlayer(QObject):
         o["vol"] = self._eff_vol()
         self._last_err = None
         self.s = {"ready": self.s.get("ready", False), "state": 3, "title": "Loading from YouTube…"}
-        self.view.page().runJavaScript(f"load({json.dumps(o)})")
+        self._run_js(f"load({json.dumps(o)})")
         self.changed.emit()
 
     # ── controls ─────────────────────────────────────────────────────────────
@@ -237,7 +255,7 @@ class YouTubePlayer(QObject):
 
     # ── state ────────────────────────────────────────────────────────────────
     def _poll(self) -> None:
-        if self._loaded:
+        if self._loaded and self._page_ready:
             self.view.page().runJavaScript("state()", self._got)
 
     def _got(self, raw) -> None:

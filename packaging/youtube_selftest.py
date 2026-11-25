@@ -96,7 +96,9 @@ def script():
         check("list command", "YouTube playlist" in r, r[:200])
         check("profile saved for sign-in", (ROOT / "config" / "youtube_profile").exists(), "")
         # hide the video → RGB follows the YouTube audio
-        QTimer.singleShot(0, lambda: win._media_card.b_vid.setChecked(False))
+        wait(lambda: yt.playing(), 15)
+        wrap.run_in_ui(lambda: win._media_card.b_vid.setChecked(False))
+        print("state before RGB check:", yt.s.get("state"), "video on screen:", win._media.video_on_screen)
         seen = set()
         end = time.time() + 4
         while time.time() < end:
