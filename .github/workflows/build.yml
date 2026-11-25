@@ -55,6 +55,18 @@ jobs:
         continue-on-error: true
         run: python packaging/media_selftest.py
 
+      - name: YouTube in the media player test
+        continue-on-error: true
+        run: python packaging/youtube_selftest.py
+
+      - name: Upload test screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-screenshots
+          path: "*_selftest*.png"
+          if-no-files-found: ignore
+
       - name: Screen-control demo (capture + interact)
         continue-on-error: true
         run: python examples/screen_control_demo.py

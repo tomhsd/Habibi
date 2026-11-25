@@ -99,10 +99,15 @@ class MediaEngine(QObject):
         self._peak_avg = 0.05
         self._setup_analysis()
 
+        self.yt = None                 # ui_youtube.YouTubePlayer, attached by the window
+        self.mode = "local"            # local | youtube
+        self.video_on_screen = False   # set by the window when the video page is showing
         self.player.mediaStatusChanged.connect(self._on_status)
         self.player.playbackStateChanged.connect(lambda *_: self.changed.emit())
-        self.player.positionChanged.connect(lambda p: self.position.emit(p, self.player.duration()))
-        self.player.durationChanged.connect(lambda d: self.position.emit(self.player.position(), d))
+        self.player.positionChanged.connect(
+            lambda p: self.mode == "local" and self.position.emit(p, self.player.duration()))
+        self.player.durationChanged.connect(
+            lambda d: self.mode == "local" and self.position.emit(self.player.position(), d))
         self.player.errorOccurred.connect(self._on_error)
         self.player.hasVideoChanged.connect(lambda *_: self.changed.emit())
 
@@ -203,11 +208,38 @@ class MediaEngine(QObject):
                        float(self.bands[10:].mean()), min(1.0, peak))
         return self.levels
 
+    # ── YouTube ──────────────────────────────────────────────────────────────
+    def attach_youtube(self, yt) -> None:
+        self.yt = yt
+        yt.changed.connect(lambda: self.mode == "youtube" and self.changed.emit())
+        yt.position.connect(lambda p, d: self.mode == "youtube" and self.position.emit(p, d))
+        yt.error.connect(self.error.emit)
+        yt.set_volume(self._vol)
+
+    def is_youtube(self) -> bool:
+        return self.mode == "youtube" and self.yt is not None
+
+    def play_youtube(self, target: dict) -> None:
+        if self.yt is None:
+            raise RuntimeError("YouTube playback isn't available (Qt WebEngine missing).")
+        self.player.stop()
+        self.mode = "youtube"
+        self.yt.load(target)
+        self.changed.emit()
+
+    def position_ms(self) -> int:
+        if self.is_youtube():
+            return int(self.yt.s.get("pos", 0) * 1000)
+        return self.player.position()
+
     # ── playlist ─────────────────────────────────────────────────────────────
     def load(self, paths, play: bool = True, append: bool = False) -> int:
         files = collect(paths)
         if not files:
             return 0
+        if self.is_youtube():
+            self.yt.stop()
+            self.mode = "local"
         if append and self.playlist:
             self.playlist.extend(files)
         else:
@@ -236,6 +268,9 @@ class MediaEngine(QObject):
         return self.repeat
 
     def play_index(self, i: int) -> None:
+        if self.is_youtube():
+            self.yt.play_index(i)
+            return
         if not (0 <= i < len(self.playlist)):
             return
         self.index = i
@@ -256,15 +291,22 @@ class MediaEngine(QObject):
         return True
 
     def next(self) -> bool:
+        if self.is_youtube():
+            return self.yt.next()
         return self._step(1)
 
     def previous(self) -> bool:
+        if self.is_youtube():
+            return self.yt.previous()
         if self.player.position() > 4000:
             self.player.setPosition(0)
             return True
         return self._step(-1)
 
     def toggle(self) -> None:
+        if self.is_youtube():
+            self.yt.toggle()
+            return
         if self.playing():
             self.player.pause()
         elif self.index >= 0:
@@ -272,11 +314,23 @@ class MediaEngine(QObject):
         elif self.playlist:
             self.play_index(0)
 
+    def pause(self) -> None:
+        if self.is_youtube():
+            self.yt.pause()
+        else:
+            self.player.pause()
+        self.changed.emit()
+
     def stop(self) -> None:
+        if self.is_youtube():
+            self.yt.stop()
         self.player.stop()
         self.changed.emit()
 
     def seek(self, ms: int) -> None:
+        if self.is_youtube():
+            self.yt.seek(ms)
+            return
         self.player.setPosition(max(0, int(ms)))
 
     def set_volume(self, pct: int) -> None:
@@ -293,24 +347,35 @@ class MediaEngine(QObject):
 
     def _apply_volume(self) -> None:
         self.audio.setVolume(self._vol / 100.0 * (0.25 if self._duck else 1.0))
+        if self.yt is not None:
+            self.yt.set_volume(self._vol)
+            self.yt.duck(self._duck)
 
     def volume(self) -> int:
         return self._vol
 
     # ── state ────────────────────────────────────────────────────────────────
     def playing(self) -> bool:
+        if self.is_youtube():
+            return self.yt.playing()
         return self.player.playbackState() == self._QMP.PlaybackState.PlayingState
 
     def paused(self) -> bool:
+        if self.is_youtube():
+            return self.yt.paused()
         return self.player.playbackState() == self._QMP.PlaybackState.PausedState
 
     def has_video(self) -> bool:
+        if self.is_youtube():
+            return True
         return bool(self.player.hasVideo())
 
     def current(self) -> Path | None:
         return self.playlist[self.index] if 0 <= self.index < len(self.playlist) else None
 
     def title(self) -> str:
+        if self.is_youtube():
+            return self.yt.title()
         try:
             from PyQt6.QtMultimedia import QMediaMetaData
             md = self.player.metaData()
@@ -325,6 +390,8 @@ class MediaEngine(QObject):
         return c.stem if c else ""
 
     def status_text(self) -> str:
+        if self.is_youtube():
+            return self.yt.status_text()
         c = self.current()
         if c is None:
             return "Nothing is loaded."
@@ -336,6 +403,8 @@ class MediaEngine(QObject):
                 f"shuffle {'on' if self.shuffle else 'off'}, repeat {self.repeat}.")
 
     def _on_status(self, status) -> None:
+        if self.mode != "local":
+            return
         if status == self._QMP.MediaStatus.EndOfMedia:
             if self.repeat == "one":
                 self.player.setPosition(0)
@@ -434,7 +503,7 @@ class RgbAnimator(QObject):
             pass
         self.spec.hue = self.hue
         self.spec.update()
-        want = self.enabled and self.e.playing() and not self.e.has_video()
+        want = self.enabled and self.e.playing() and not (self.e.has_video() and self.e.video_on_screen)
         if want:
             if not self.active:
                 self.active = True
@@ -549,17 +618,19 @@ class MediaCard(U.CornerCard):
 
         opt = QHBoxLayout(); opt.setSpacing(4)
         self.b_files = _btn("📂 FILES", "Open audio or video files")
-        self.b_folder = _btn("📁 FOLDER", "Play a whole folder")
+        self.b_folder = _btn("📁", "Play a whole folder", 30)
+        self.b_yt = _btn("▶ YT", "Play a YouTube video or playlist (link or search)")
         self.b_list = _btn("☰", "Show playlist", 30); self.b_list.setCheckable(True)
         self.b_rgb = _btn("🌈", "RGB colours with the music", 30); self.b_rgb.setCheckable(True)
         self.b_rgb.setChecked(True)
         self.b_vid = _btn("🎬", "Show the video", 30); self.b_vid.setCheckable(True)
         self.b_vid.setChecked(True); self.b_vid.setVisible(False)
-        for b in (self.b_files, self.b_folder, self.b_list, self.b_rgb, self.b_vid):
+        for b in (self.b_files, self.b_folder, self.b_yt, self.b_list, self.b_rgb, self.b_vid):
             opt.addWidget(b)
         lay.addLayout(opt)
         self.b_files.clicked.connect(self._open_files)
         self.b_folder.clicked.connect(self._open_folder)
+        self.b_yt.clicked.connect(self._open_youtube)
         self.b_list.toggled.connect(lambda on: self.listw.setVisible(on))
         self.b_vid.toggled.connect(lambda on: self.want_video.emit(on and self.e.has_video()))
 
@@ -621,10 +692,60 @@ class MediaCard(U.CornerCard):
             if not n:
                 self.now.setText("No audio or video in that folder.")
 
+    def _open_youtube(self):
+        from PyQt6.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getText(self, "YouTube", "Paste a YouTube video or playlist link, "
+                                                         "or type what to search for:")
+        text = (text or "").strip()
+        if not ok or not text:
+            return
+        import ui_youtube
+        target = ui_youtube.parse_link(text)
+        if not target:
+            self.now.setText("Searching YouTube…")
+            try:
+                target = ui_youtube.search(text, playlist="playlist" in text.lower())
+            except Exception as ex:
+                self.now.setText(f"YouTube search failed: {ex}"[:60])
+                return
+        if not target:
+            self.now.setText("Nothing found on YouTube.")
+            return
+        try:
+            self.e.play_youtube(target)
+        except Exception as ex:
+            self.now.setText(str(ex)[:60])
+
+    def _refresh_youtube(self):
+        e, yt = self.e, self.e.yt
+        playing = e.playing()
+        self.now.setText(self.fontMetrics().elidedText(
+            "▶ " + (e.title() or "Loading from YouTube…"), Qt.TextElideMode.ElideRight, 260))
+        self.now.setToolTip(f"https://www.youtube.com/watch?v={yt.s.get('id', '')}")
+        st = yt.s.get("state")
+        state = "LOADING" if st == 3 else "PLAYING" if st == 1 else "PAUSED" if st == 2 else "STOPPED"
+        self.set_extra(f"YT {state}  {yt.index() + 1}/{yt.count()}", U.C.RED if playing else U.C.ACC2)
+        ids = list(yt.s.get("list") or [])
+        key = ("yt", tuple(ids), len(yt.titles))
+        if key != self._last_list:
+            self._last_list = key
+            self.listw.clear()
+            for i, vid in enumerate(ids[:500]):
+                QListWidgetItem(f"{i + 1:>3}. {yt.titles.get(vid, vid)}", self.listw)
+            yt.fetch_titles(ids)
+        if 0 <= yt.index() < self.listw.count():
+            self.listw.setCurrentRow(yt.index())
+
     def refresh(self):
         e = self.e
         playing = e.playing()
         self.b_play.setText("⏸" if playing else "▶")
+        if e.is_youtube():
+            self._refresh_youtube()
+            self.vol_lbl.setText(f"🔊 {e.volume()}")
+            self.b_vid.setVisible(True)
+            self.want_video.emit(self.b_vid.isChecked())
+            return
         c = e.current()
         if c is None:
             self.set_extra("IDLE", U.C.TEXT_DIM)
@@ -659,6 +780,15 @@ class MediaCard(U.CornerCard):
 
 def run_command(engine: MediaEngine, card: MediaCard, rgb: RgbAnimator, cmd: str, a: dict) -> str:
     cmd = (cmd or "").lower().strip()
+    if cmd == "youtube":
+        import ui_youtube
+        target = a.get("target") or ui_youtube.parse_link(str(a.get("link", "")))
+        if not target:
+            return "I couldn't find that on YouTube."
+        engine.play_youtube(target)
+        kind = "playlist" if target.get("list") else "video"
+        return (f"Playing the YouTube {kind} in Habibi's player (the official YouTube player; "
+                f"ads and the owner's settings apply).")
     if cmd == "play":
         paths = a.get("paths") or []
         if paths:
@@ -674,7 +804,7 @@ def run_command(engine: MediaEngine, card: MediaCard, rgb: RgbAnimator, cmd: str
             engine.toggle()
         return engine.status_text()
     if cmd in ("pause",):
-        engine.player.pause(); return engine.status_text()
+        engine.pause(); return engine.status_text()
     if cmd in ("resume",):
         if not engine.playing():
             engine.toggle()
@@ -684,6 +814,8 @@ def run_command(engine: MediaEngine, card: MediaCard, rgb: RgbAnimator, cmd: str
     if cmd == "stop":
         engine.stop(); return "Stopped."
     def _now() -> str:
+        if engine.is_youtube():
+            return "Skipping on YouTube."
         c = engine.current()
         return f"Now playing {c.name} — track {engine.index + 1} of {len(engine.playlist)}." if c else "Nothing is loaded."
     if cmd == "next":
@@ -693,7 +825,7 @@ def run_command(engine: MediaEngine, card: MediaCard, rgb: RgbAnimator, cmd: str
     if cmd == "seek":
         sec = float(a.get("seconds", 0))
         if a.get("relative"):
-            engine.seek(engine.player.position() + sec * 1000)
+            engine.seek(engine.position_ms() + sec * 1000)
         else:
             engine.seek(sec * 1000)
         return engine.status_text()
@@ -720,6 +852,18 @@ def run_command(engine: MediaEngine, card: MediaCard, rgb: RgbAnimator, cmd: str
         rgb.enabled = on
         card.b_rgb.setChecked(on)
         return f"RGB colours {'on' if on else 'off'}."
+    if cmd == "list" and engine.is_youtube():
+        ids = list(engine.yt.s.get("list") or [])
+        if not ids:
+            return engine.status_text()
+        t = engine.yt.titles
+        rows = [f"{'▶' if i == engine.yt.index() else ' '} {i + 1}. {t.get(v, v)}" for i, v in enumerate(ids[:40])]
+        return "YouTube playlist:\n" + "\n".join(rows) + (f"\n… {len(ids) - 40} more" if len(ids) > 40 else "")
+    if cmd == "play_index" and engine.is_youtube():
+        i = int(a.get("index", 1)) - 1
+        if not 0 <= i < engine.yt.count():
+            return f"There is no video {i + 1} in this playlist."
+        engine.play_index(i); return f"Playing video {i + 1} of the playlist."
     if cmd == "list":
         if not engine.playlist:
             return "The playlist is empty."

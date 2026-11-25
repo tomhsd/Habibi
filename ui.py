@@ -19,6 +19,10 @@ if platform.system() == "Windows":
 else:
     _WIN_HIDE: dict = {}
 
+try:   # must load before the QApplication exists (YouTube in the media player)
+    import PyQt6.QtWebEngineWidgets  # noqa: F401
+except Exception:
+    pass
 from PyQt6.QtCore import (
     QEasingCurve, QMimeData, QObject, QParallelAnimationGroup, QPointF,
     QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal,
@@ -4770,7 +4774,17 @@ class MainWindow(QMainWindow):
             self._video = QVideoWidget()
             self._video.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
             self._media.player.setVideoOutput(self._video)
-            v.addWidget(self._video, 1)
+            self._video_stack = QStackedWidget()        # 0 = local video, 1 = YouTube
+            self._video_stack.addWidget(self._video)
+            try:
+                import ui_youtube
+                self._yt = ui_youtube.YouTubePlayer(self)
+                self._video_stack.addWidget(self._yt.view)
+                self._media.attach_youtube(self._yt)
+            except Exception as e:
+                self._yt = None
+                print(f"[Media] YouTube unavailable: {e}")
+            v.addWidget(self._video_stack, 1)
             bar = QHBoxLayout()
             bar.setContentsMargins(8, 4, 8, 4)
             back = QPushButton("◀  REACTOR")
@@ -4782,7 +4796,7 @@ class MainWindow(QMainWindow):
                                 f" border: 1px solid {C.BORDER}; border-radius: 4px; padding: 3px 10px; }}"
                                 f"QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI_DIM}; }}")
             back.clicked.connect(lambda: self._media_card.b_vid.setChecked(False))
-            full.clicked.connect(lambda: self._video.setFullScreen(not self._video.isFullScreen()))
+            full.clicked.connect(self._toggle_media_fullscreen)
             bar.addWidget(back)
             bar.addStretch()
             bar.addWidget(full)
@@ -4795,15 +4809,24 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"[Media] video unavailable: {e}")
 
+    def _toggle_media_fullscreen(self) -> None:
+        if self._media.is_youtube():
+            self._toggle_fullscreen()                    # the whole window (web view can't go solo)
+        else:
+            self._video.setFullScreen(not self._video.isFullScreen())
+
     def _show_media_video(self, on: bool) -> None:
         if self._hud_cam_stack.currentIndex() == 1:      # camera has priority
+            self._media.video_on_screen = False
             return
+        self._video_stack.setCurrentIndex(1 if self._media.is_youtube() else 0)
         if on:
             self._hud_cam_stack.setCurrentIndex(2)
         elif self._hud_cam_stack.currentIndex() == 2:
             if self._video.isFullScreen():
                 self._video.setFullScreen(False)
             self._hud_cam_stack.setCurrentIndex(0)
+        self._media.video_on_screen = self._hud_cam_stack.currentIndex() == 2
 
     def _on_media_cmd(self, payload) -> None:
         cmd, args, holder, ev = payload
