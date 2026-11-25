@@ -1,5 +1,5 @@
 """
-actions/find_files.py — find any file on the PC in a moment.
+plugins/find_files.py — find any file on the PC in a moment.
 
 Uses the Windows Search index (the same one the Start menu uses), so it is
 instant and can also search inside documents. If the index isn't available it
@@ -140,7 +140,7 @@ def find_files(parameters: dict, player=None) -> str:
     return f"Found {len(rows)} file(s):\n" + _fmt(rows) + "\nSay 'open number N' and I'll open it (action open with its path)."
 
 
-TOOL = {
+PLUGIN = {
     "name": "find_files",
     "description": (
         "Find files anywhere on the PC instantly (Windows Search index). search(name, extension, "
@@ -162,5 +162,9 @@ TOOL = {
         },
         "required": ["action"],
     },
-    "handler": find_files,
 }
+
+
+def run(parameters: dict, player=None, session_memory=None) -> str:
+    """Plugin entry point (switch this tool off in ⚙ PLUGINS)."""
+    return find_files(parameters or {}, player=player)

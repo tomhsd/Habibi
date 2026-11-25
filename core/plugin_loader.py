@@ -63,12 +63,26 @@ class PluginRegistry:
             return f"Plugin '{name}' is not available."
         if not get_plugin_enabled(name):
             return f"The '{name}' plugin is currently disabled."
+        # Core safety supervises every plugin: emergency stop, blocked apps/folders
+        # (PermissionError) and the activity log — plugins can't switch these off.
+        from core import safety
+        if safety.stopped():
+            return "🛑 Emergency stop is active — wait a few seconds, then ask again."
         try:
-            return _call_run(rec.run, parameters, player, session_memory) or "Done."
+            result = _call_run(rec.run, parameters, player, session_memory) or "Done."
+        except safety.Stopped:
+            result = "🛑 Stopped by the emergency stop (Ctrl+Alt+Q)."
+        except PermissionError as e:
+            result = f"Not allowed: {e}"
         except Exception as e:
             self._logger(f"Plugin '{name}' crashed during run(): {e}")
             traceback.print_exc()
-            return f"Sir, the '{name}' plugin failed: {e}"
+            result = f"Sir, the '{name}' plugin failed: {e}"
+        try:
+            safety.log_activity(name, parameters, str(result))
+        except Exception:
+            pass
+        return result
 
     # -- called by ui.py's settings tab to render per-plugin config forms --
     def settings_schemas(self) -> list[dict]:

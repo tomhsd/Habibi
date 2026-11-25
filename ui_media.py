@@ -12,7 +12,7 @@ ui_media.py — Habibi's built-in audio/video player (no browser).
                   the reactor pulses with the music. Your own colour comes back
                   when playback stops or pauses.
 
-The AI controls it through actions/media_player.py → HabibiUI.media().
+The AI controls it through plugins/media_player.py → HabibiUI.media().
 """
 from __future__ import annotations
 
@@ -654,7 +654,7 @@ class MediaCard(U.CornerCard):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Commands from the AI (actions/media_player.py)
+#  Commands from the AI (plugins/media_player.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_command(engine: MediaEngine, card: MediaCard, rgb: RgbAnimator, cmd: str, a: dict) -> str:

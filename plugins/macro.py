@@ -1,5 +1,5 @@
 """
-actions/macro.py — record what you do once, replay it by voice.
+plugins/macro.py — record what you do once, replay it by voice.
 
 "Record a macro called report" → Habibi records your mouse clicks, scrolling
 and keys until you say "stop recording" (or 10 minutes pass). "Run the report
@@ -222,7 +222,7 @@ def macro(parameters: dict, player=None) -> str:
         return str(e)
 
 
-TOOL = {
+PLUGIN = {
     "name": "macro",
     "description": (
         "Record and replay the user's own mouse/keyboard actions. record(name) starts recording "
@@ -239,5 +239,9 @@ TOOL = {
         },
         "required": ["action"],
     },
-    "handler": macro,
 }
+
+
+def run(parameters: dict, player=None, session_memory=None) -> str:
+    """Plugin entry point (switch this tool off in ⚙ PLUGINS)."""
+    return macro(parameters or {}, player=player)

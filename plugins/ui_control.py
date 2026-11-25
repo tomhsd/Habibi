@@ -1,5 +1,5 @@
 """
-actions/ui_control.py — precise control of Windows apps through UI Automation.
+plugins/ui_control.py — precise control of Windows apps through UI Automation.
 
 Instead of guessing pixel positions from a screenshot, this asks Windows for
 the real buttons, menus, fields and lists of a window (the same information
@@ -427,7 +427,7 @@ def ui_control(parameters: dict, player=None) -> str:
         return "UI Automation needs pywinauto (pip install pywinauto)."
 
 
-TOOL = {
+PLUGIN = {
     "name": "ui_control",
     "description": (
         "MOST PRECISE way to control Windows desktop apps: finds real buttons, menus, fields and "
@@ -454,5 +454,9 @@ TOOL = {
         },
         "required": ["action"],
     },
-    "handler": ui_control,
 }
+
+
+def run(parameters: dict, player=None, session_memory=None) -> str:
+    """Plugin entry point (switch this tool off in ⚙ PLUGINS)."""
+    return ui_control(parameters or {}, player=player)

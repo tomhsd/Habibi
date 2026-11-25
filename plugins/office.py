@@ -1,5 +1,5 @@
 """
-actions/office.py — control Excel, Word and PowerPoint directly (no clicking).
+plugins/office.py — control Excel, Word and PowerPoint directly (no clicking).
 
 Talks to Office through its own automation interface (COM), the same way
 macros do, so every cell, paragraph and slide is changed exactly. Works with
@@ -235,7 +235,7 @@ def office(parameters: dict, player=None) -> str:
         return f"{app.title()} error: {msg[:200]}"
 
 
-TOOL = {
+PLUGIN = {
     "name": "office",
     "description": (
         "Control Microsoft Excel, Word and PowerPoint DIRECTLY (exact, no clicking). Works on the "
@@ -259,5 +259,9 @@ TOOL = {
         },
         "required": ["app", "action"],
     },
-    "handler": office,
 }
+
+
+def run(parameters: dict, player=None, session_memory=None) -> str:
+    """Plugin entry point (switch this tool off in ⚙ PLUGINS)."""
+    return office(parameters or {}, player=player)
