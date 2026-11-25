@@ -466,6 +466,10 @@ def run(parameters: dict, player=None, session_memory=None) -> str:
         try:
             player.run_in_ui(lambda: setup_ui(player))
         except Exception as e:
+            if isinstance(e, ImportError) and "WebEngine" in str(e):
+                import sys
+                return ("The YouTube player needs the PyQt6-WebEngine package, which isn't installed. "
+                        f"Run this once, then restart Habibi: \"{sys.executable}\" -m pip install PyQt6-WebEngine")
             return f"The YouTube player couldn't start: {e}"
     if _yt is None:
         return "The YouTube player isn't available on this PC (Qt WebEngine missing)."
