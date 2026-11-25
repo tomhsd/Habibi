@@ -66,6 +66,35 @@ function state(){
 <script src="https://www.youtube.com/iframe_api"></script>
 </body></html>"""
 
+_server = None
+
+
+def _serve_page() -> str:
+    """Start (once) a tiny web server on localhost that serves the player page,
+    and return its address. Only this machine can reach it."""
+    global _server
+    if _server is None:
+        import http.server
+        import threading
+
+        class _H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = _HTML.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        _server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+        threading.Thread(target=_server.serve_forever, daemon=True).start()
+    return f"http://localhost:{_server.server_address[1]}/"
+
+
 _ERRORS = {
     2: "That YouTube link isn't valid.",
     5: "This video can't play in Habibi's player.",
@@ -178,7 +207,9 @@ class YouTubePlayer(QObject):
         if not self._loaded:
             self._loaded = True
             self._page_ready = False
-            self.view.setHtml(_HTML, QUrl(_ORIGIN + "/"))
+            # Served from a tiny local web server: YouTube refuses embeds (error
+            # 152/153) from a page that has no real http(s) origin or Referer.
+            self.view.load(QUrl(_serve_page()))
 
     def _on_page_loaded(self, ok: bool) -> None:
         self._page_ready = True
