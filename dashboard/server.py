@@ -579,8 +579,8 @@ class DashboardServer:
         if self._host != self._ip:
             return f"https://{self._host}:{PORT}"
         if self._ssl_enabled():
-            return f"{self._ip}:{PORT + 1}"
-        return f"{self._ip}:{PORT}"
+            return f"https://{self._ip}:{PORT}"
+        return f"http://{self._ip}:{PORT}"
 
     def _aes_key(self, session_key: str) -> bytes:
         if session_key not in self._aes_cache:
