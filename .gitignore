@@ -89,4 +89,6 @@ config/macros/
 smoke_results.json
 media_selftest.png
 youtube_selftest_*.png
+finance_*_selftest.png
+config/finance/
 config/youtube_profile/

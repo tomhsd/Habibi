@@ -181,7 +181,13 @@ class PluginRegistry:
             traceback.print_exc()
             result = f"Sir, the '{name}' plugin failed: {e}"
         try:
-            safety.log_activity(name, parameters, str(result))
+            # A plugin holding private data (money, health…) sets PRIVATE_LOG = True:
+            # the activity log then records only which action ran, never the values.
+            if getattr(rec.run, "__globals__", {}).get("PRIVATE_LOG") is True:
+                safety.log_activity(name, {"action": str((parameters or {}).get("action", ""))[:40]},
+                                    "(private: details not logged)")
+            else:
+                safety.log_activity(name, parameters, str(result))
         except Exception:
             pass
         return result

@@ -48,7 +48,11 @@ def third_party_imports() -> list[str]:
                 continue
             for name in names:
                 top = name.split(".")[0]
-                if top in LOCAL or top in sys.stdlib_module_names:
+                if top in LOCAL:
+                    continue
+                # Plugins load at runtime, so PyInstaller never sees their imports:
+                # keep the standard-library ones too (e.g. sqlite3 for finance).
+                if top in sys.stdlib_module_names and f.parent.name != "plugins":
                     continue
                 found.add(name)
     usable = []

@@ -59,6 +59,12 @@ jobs:
         continue-on-error: true
         run: python packaging/youtube_selftest.py
 
+      - name: Personal finance plugin test (records, DPAPI file, reminders, card)
+        continue-on-error: true
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python packaging/finance_selftest.py
+
       - name: Upload test screenshots
         if: always()
         uses: actions/upload-artifact@v4
