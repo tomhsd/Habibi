@@ -1,3 +1,4 @@
+from core import secure as _secure
 import json
 import sys
 from pathlib import Path
@@ -27,7 +28,7 @@ def save_api_keys(gemini_api_key: str) -> None:
         except Exception:
             data = {}
 
-    data["gemini_api_key"] = gemini_api_key.strip()
+    data["gemini_api_key"] = _secure.protect(gemini_api_key.strip())
 
     CONFIG_FILE.write_text(
         json.dumps(data, indent=2),
@@ -38,7 +39,7 @@ def load_api_keys() -> dict:
     if not CONFIG_FILE.exists():
         return {}
     try:
-        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        return _secure.reveal_secrets(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
     except Exception as e:
         print(f"❌ Failed to load api_keys.json: {e}")
         return {}

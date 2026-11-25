@@ -1,4 +1,5 @@
 #desktop.py
+from core import secure as _secure
 import os
 import sys
 import json
@@ -26,7 +27,7 @@ def _get_base_dir() -> Path:
 def _get_api_key() -> str:
     path = _get_base_dir() / "config" / "api_keys.json"
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+        return _secure.reveal(json.load(f)["gemini_api_key"])
     
 def _get_desktop() -> Path:
     if _OS == "Linux":

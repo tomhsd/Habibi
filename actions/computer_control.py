@@ -1,4 +1,5 @@
 #computer_control.py
+from core import secure as _secure
 import io
 import json
 import platform
@@ -55,7 +56,7 @@ def _get_os() -> str:
 
 
 def _get_api_key() -> str:
-    return _load_config().get("gemini_api_key", "")
+    return _secure.reveal(_load_config().get("gemini_api_key", ""))
 
 _SAFE_SCREENSHOT_ROOTS = (
     Path.home(),
@@ -147,7 +148,7 @@ def _user_profile() -> dict:
     """Read identity fields from long-term memory."""
     try:
         if _MEMORY_PATH.exists():
-            data     = json.loads(_MEMORY_PATH.read_text(encoding="utf-8"))
+            data     = json.loads(_secure.read_protected_text(_MEMORY_PATH))
             identity = data.get("identity", {})
             return {k: v.get("value", "") for k, v in identity.items()}
     except Exception:

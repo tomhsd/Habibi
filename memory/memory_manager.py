@@ -1,3 +1,4 @@
+from core import secure as _secure
 import json
 import re
 from datetime import datetime
@@ -59,7 +60,7 @@ def load_memory() -> dict:
         return _empty_memory()
     with _lock:
         try:
-            data = json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
+            data = json.loads(_secure.read_protected_text(MEMORY_PATH))
             if isinstance(data, dict):
                 base = _empty_memory()
                 for key in base:
@@ -121,9 +122,8 @@ def save_memory(memory: dict) -> None:
     memory = _trim_to_limit(memory)
     MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _lock:
-        MEMORY_PATH.write_text(
-            json.dumps(memory, indent=2, ensure_ascii=False),
-            encoding="utf-8",
+        _secure.write_protected_text(
+            MEMORY_PATH, json.dumps(memory, indent=2, ensure_ascii=False),
         )
 
 
@@ -447,9 +447,8 @@ def save_session_summary(summary: str, language: str = "") -> None:
     memory["sessions"] = sessions[-_SESSION_MAX:]
     with _lock:
         MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        MEMORY_PATH.write_text(
-            json.dumps(memory, indent=2, ensure_ascii=False),
-            encoding="utf-8",
+        _secure.write_protected_text(
+            MEMORY_PATH, json.dumps(memory, indent=2, ensure_ascii=False),
         )
     print(f"[Memory] 📝 Session saved ({entry['date']}): {summary[:60]}…")
 
@@ -463,15 +462,14 @@ def pop_last_session() -> dict | None:
         if not MEMORY_PATH.exists():
             return None
         try:
-            memory   = json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
+            memory   = json.loads(_secure.read_protected_text(MEMORY_PATH))
             sessions = memory.get("sessions", [])
             if not isinstance(sessions, list) or not sessions:
                 return None
             entry = sessions.pop()          # remove the last entry
             memory["sessions"] = sessions
-            MEMORY_PATH.write_text(
-                json.dumps(memory, indent=2, ensure_ascii=False),
-                encoding="utf-8",
+            _secure.write_protected_text(
+                MEMORY_PATH, json.dumps(memory, indent=2, ensure_ascii=False),
             )
             return entry
         except Exception as e:

@@ -8,6 +8,7 @@ CryptoJS is auto-downloaded once and served locally — no CDN needed after that
 Install deps:  pip install fastapi "uvicorn[standard]" cryptography
 """
 
+from core import secure as _secure
 import asyncio
 import base64
 import hashlib
@@ -70,7 +71,7 @@ def _get_gemini_key() -> str | None:
     try:
         import json as _json
         with open(BASE_DIR / "config" / "api_keys.json", "r", encoding="utf-8") as f:
-            return _json.load(f).get("gemini_api_key")
+            return _secure.reveal(_json.load(f).get("gemini_api_key"))
     except Exception:
         return None
 
@@ -273,9 +274,15 @@ def _ensure_network_access(port: int) -> None:
     if sys.platform == "win32":
         import ctypes, time
 
-        port_rule = f"HABIBI Dashboard Port {port}"
-        prog_rule  = "HABIBI Dashboard Python"
-        py_exe     = sys.executable
+        # SECURITY: only allow Habibi's port on trusted networks.
+        #   • Home/work networks (Private/Domain profile)
+        #   • Tailscale (100.64.0.0/10), whatever profile Windows gives it
+        # Public networks (cafés, airports…) are NOT opened, and Habibi never
+        # changes a network's type. Older, wider rules are removed.
+        lan_rule = f"HABIBI Remote v2 LAN {port}"
+        ts_rule  = f"HABIBI Remote v2 Tailscale {port}"
+        old_rules = [f"HABIBI Dashboard Port {port}", "HABIBI Dashboard Python",
+                     f"JARVIS Dashboard Port {port}", "JARVIS Dashboard Python"]
 
         def _netsh_rule_exists(name: str) -> bool:
             try:
@@ -287,46 +294,25 @@ def _ensure_network_access(port: int) -> None:
             except Exception:
                 return False
 
-        def _network_is_public() -> bool:
-            try:
-                r = subprocess.run(
-                    ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                     "(Get-NetConnectionProfile | "
-                     "Where-Object {$_.NetworkCategory -eq 'Public'} | "
-                     "Measure-Object).Count"],
-                    capture_output=True, text=True, timeout=6,
-                )
-                return r.stdout.strip() not in ("", "0")
-            except Exception:
-                return False
+        need_lan = not _netsh_rule_exists(lan_rule)
+        need_ts  = not _netsh_rule_exists(ts_rule)
+        stale    = [n for n in old_rules if _netsh_rule_exists(n)]
 
-        need_port    = not _netsh_rule_exists(port_rule)
-        need_prog    = not _netsh_rule_exists(prog_rule)
-        need_private = _network_is_public()
+        if not need_lan and not need_ts and not stale:
+            return  # already configured safely
 
-        if not need_port and not need_prog and not need_private:
-            return  # already fully configured
-
-        # Build a .bat file — netsh + powershell, runs fast when elevated
         bat_lines = ["@echo off"]
-        if need_private:
+        for n in stale:
+            bat_lines.append(f'netsh advfirewall firewall delete rule name="{n}"')
+        if need_lan:
             bat_lines.append(
-                'powershell -NoProfile -NonInteractive -Command "'
-                'Get-NetConnectionProfile | '
-                "Where-Object {$_.NetworkCategory -eq 'Public'} | "
-                'Set-NetConnectionProfile -NetworkCategory Private"'
+                f'netsh advfirewall firewall add rule name="{lan_rule}" dir=in action=allow '
+                f'protocol=TCP localport={port} profile=private,domain'
             )
-        if need_port:
+        if need_ts:
             bat_lines.append(
-                f'netsh advfirewall firewall add rule '
-                f'name="{port_rule}" protocol=TCP dir=in '
-                f'localport={port} action=allow'
-            )
-        if need_prog:
-            bat_lines.append(
-                f'netsh advfirewall firewall add rule '
-                f'name="{prog_rule}" dir=in action=allow '
-                f'program="{py_exe}" enable=yes'
+                f'netsh advfirewall firewall add rule name="{ts_rule}" dir=in action=allow '
+                f'protocol=TCP localport={port} remoteip=100.64.0.0/10 profile=any'
             )
 
         bat_body = "\r\n".join(bat_lines) + "\r\n"
@@ -538,6 +524,10 @@ class DashboardServer:
         self._device_ws                   = None            # the connected Habibi phone app
         self._device_info: dict           = {}
         self._device_pending: dict        = {}              # command id → Future
+        self._fails: dict[str, list]      = {}   # ip → recent failed login times
+        self._locked_until: dict[str, float] = {}
+        self._global_fails: list          = []
+        self._alert_callback              = None
         self._tokens: set[str]            = set()
         self._token_keys: dict[str, str]  = {}   # auth_token → session_key
         self._aes_cache:  dict[str, bytes]= {}   # session_key → AES bytes
@@ -600,6 +590,53 @@ class DashboardServer:
 
     def set_wake_callback(self, fn) -> None:
         self._wake_callback = fn
+
+    # ── brute-force protection ───────────────────────────────────────────
+    _MAX_FAILS, _FAIL_WINDOW, _LOCK_SECS, _GLOBAL_MAX = 5, 600, 900, 20
+
+    def set_alert_callback(self, fn) -> None:
+        self._alert_callback = fn
+
+    @staticmethod
+    def _ip_of(conn) -> str:
+        try:
+            return conn.client.host or "?"
+        except Exception:
+            return "?"
+
+    def _is_locked(self, ip: str) -> bool:
+        return self._locked_until.get(ip, 0) > time.time()
+
+    def _note_ok(self, ip: str) -> None:
+        self._fails.pop(ip, None)
+
+    def _note_fail(self, ip: str) -> None:
+        """5 wrong keys from one device in 10 min → that device is blocked for 15 min.
+        20 wrong keys from anywhere → every pending key is cancelled."""
+        now = time.time()
+        recent = [t for t in self._fails.get(ip, []) if now - t < self._FAIL_WINDOW] + [now]
+        self._fails[ip] = recent
+        self._global_fails = [t for t in self._global_fails if now - t < self._FAIL_WINDOW] + [now]
+        msg = None
+        if len(recent) >= self._MAX_FAILS:
+            self._locked_until[ip] = now + self._LOCK_SECS
+            self._fails[ip] = []
+            msg = f"Remote Control: blocked {ip} for 15 minutes after {self._MAX_FAILS} wrong keys."
+        if len(self._global_fails) >= self._GLOBAL_MAX:
+            self._pending_keys.clear()
+            self._global_fails = []
+            msg = "Remote Control: too many wrong keys — all keys cancelled. Press NEW KEY to get a fresh one."
+        if msg:
+            print(f"[Dashboard] {msg}")
+            if self._alert_callback:
+                try:
+                    self._alert_callback(msg)
+                except Exception:
+                    pass
+
+    def _locked_response(self):
+        return JSONResponse({"ok": False, "error": "Too many wrong tries — wait 15 minutes."},
+                            status_code=429)
 
     def set_connect_callback(self, fn) -> None:
         self._connect_callback = fn
@@ -727,6 +764,9 @@ class DashboardServer:
 
         @app.post("/login")
         async def login(req: Request):
+            ip = self._ip_of(req)
+            if self._is_locked(ip):
+                return self._locked_response()
             body    = await req.json()
             entered = str(body.get("pin", "")).strip().upper()
             now     = time.time()
@@ -742,15 +782,22 @@ class DashboardServer:
                     {"type": "sys", "text": "Remote connection established."}
                 ))
                 # Bearer token in response body — no cookies needed (works on any browser/HTTP)
+                self._note_ok(ip)
                 return JSONResponse({"ok": True, "token": tok})
+            self._note_fail(ip)
             return JSONResponse({"ok": False, "error": "Invalid or expired key"},
                                 status_code=401)
 
         @app.get("/auto-login")
-        async def auto_login(key: str = ""):
+        async def auto_login(request: Request, key: str = ""):
             """QR code target — validates one-time key, creates session, redirects phone."""
             now = time.time()
+            ip = self._ip_of(request)
+            if self._is_locked(ip):
+                return HTMLResponse("<h3 style='font-family:sans-serif'>Too many wrong tries — "
+                                    "wait 15 minutes.</h3>", status_code=429)
             if not key or key not in self._pending_keys or self._pending_keys[key] <= now:
+                self._note_fail(ip)
                 return HTMLResponse("""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width">
 <style>
@@ -796,12 +843,16 @@ class DashboardServer:
         @app.post("/api/device-login")
         async def device_login_ep(req: Request):
             """Return a fresh auth token for a previously paired device token."""
+            ip = self._ip_of(req)
+            if self._is_locked(ip):
+                return self._locked_response()
             try:
                 body = await req.json()
             except Exception:
                 return JSONResponse({"ok": False}, status_code=400)
             dev_tok = (body.get("device_token") or "").strip()
             if not dev_tok or dev_tok not in self._device_sessions:
+                self._note_fail(ip)
                 return JSONResponse({"ok": False}, status_code=401)
             session_key = self._device_sessions[dev_tok]["session_key"]
             tok = secrets.token_urlsafe(32)
@@ -885,6 +936,9 @@ class DashboardServer:
         async def pair_device(req: Request):
             """Phone app sends the 6-character Remote Control key once and gets a
             permanent device token (stored hashed in config/paired_devices.json)."""
+            ip = self._ip_of(req)
+            if self._is_locked(ip):
+                return self._locked_response()
             try:
                 body = await req.json()
             except Exception:
@@ -893,7 +947,9 @@ class DashboardServer:
             name    = str(body.get("name", "Phone"))[:60]
             now     = time.time()
             if not (entered in self._pending_keys and self._pending_keys[entered] > now):
+                self._note_fail(ip)
                 return JSONResponse({"ok": False, "error": "Invalid or expired key"}, status_code=401)
+            self._note_ok(ip)
             del self._pending_keys[entered]
             dev = secrets.token_urlsafe(32)
             self._pairs[_hash_tok(dev)] = {"name": name, "paired": int(now)}
@@ -902,9 +958,14 @@ class DashboardServer:
             return JSONResponse({"ok": True, "device_token": dev})
 
         @app.get("/app-login")
-        async def app_login(device: str = ""):
+        async def app_login(request: Request, device: str = ""):
             """Opened inside the phone app's WebView: signs the remote page in."""
+            ip = self._ip_of(request)
+            if self._is_locked(ip):
+                return HTMLResponse("<h3 style='font-family:sans-serif'>Too many wrong tries — "
+                                    "wait 15 minutes.</h3>", status_code=429)
             if not device or _hash_tok(device) not in self._pairs:
+                self._note_fail(ip)
                 return HTMLResponse("<h3 style='font-family:sans-serif'>Phone not paired — "
                                     "pair it again in the Habibi app settings.</h3>", status_code=401)
             tok, key = self._new_web_session()

@@ -71,3 +71,9 @@ phone_app/local.properties
 # Habibi personality and mood (personal)
 config/persona.json
 config/mood.json
+
+# Android signing key - NEVER upload
+signing/
+*.jks
+*.keystore
+keystore.b64

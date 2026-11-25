@@ -1,3 +1,4 @@
+from core import secure as _secure
 import platform as _platform
 import subprocess as _subprocess
 import sys as _sys0
@@ -103,6 +104,12 @@ def get_base_dir():
 
 BASE_DIR        = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+# Encrypt any API keys / tokens still stored as plain text (Windows DPAPI).
+try:
+    if _secure.migrate_config(API_CONFIG_PATH):
+        print("[Security] API keys in config/api_keys.json are now encrypted.")
+except Exception as _e:
+    print(f"[Security] Could not encrypt config: {_e}")
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
 LIVE_MODEL          = "models/gemini-3.1-flash-live-preview"
 CHANNELS            = 1
@@ -134,7 +141,7 @@ def _pcm_level(samples) -> float:
 
 def _get_api_key() -> str:
     with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+        return _secure.reveal(json.load(f)["gemini_api_key"])
 
 
 def _load_system_prompt() -> str:
@@ -678,6 +685,7 @@ class HabibiLive:
             from dashboard.server import DashboardServer
             self._dashboard = DashboardServer()
             self._dashboard.set_connect_callback(self._on_phone_connected)
+            self._dashboard.set_alert_callback(lambda m: self.ui.write_log(f"ERR: {m}"))
             asyncio.create_task(self._run_dashboard())
             # Runs for the whole lifetime, not just inside an active session
             asyncio.create_task(self._process_dashboard_commands())

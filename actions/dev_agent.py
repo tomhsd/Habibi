@@ -1,3 +1,4 @@
+from core import secure as _secure
 import subprocess
 import sys
 import json
@@ -21,7 +22,7 @@ MODEL_WRITER     = "gemini-flash-latest"
 
 def _get_api_key() -> str:
     with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+        return _secure.reveal(json.load(f)["gemini_api_key"])
 
 
 def _get_model(model_name: str):

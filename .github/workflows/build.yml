@@ -35,6 +35,14 @@ jobs:
           pip install pyinstaller fastapi "uvicorn[standard]" cryptography python-multipart "qrcode[pil]"
           pip install openwakeword || echo "openwakeword skipped (wake word will be unavailable)"
 
+      - name: Self-test Windows encryption (DPAPI)
+        run: >-
+          python -c "import tempfile, os; from core import secure as s;
+          v = s.protect('test-123'); assert v.startswith('dpapi:') and s.reveal(v) == 'test-123', 'value';
+          p = os.path.join(tempfile.gettempdir(), 'mem.json'); s.write_protected_text(p, '{}');
+          assert open(p).read().startswith('HABIBI-DPAPI-1') and s.read_protected_text(p) == '{}', 'file';
+          print('DPAPI self-test OK')"
+
       - name: Build Habibi.exe
         run: python packaging/build_exe.py
 
@@ -72,12 +80,24 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build Habibi.apk
+      - name: Build Habibi.apk (signed with the permanent Habibi key)
+        env:
+          KS_B64: ${{ secrets.HABIBI_KEYSTORE_B64 }}
+          HABIBI_KEYSTORE_PASSWORD: ${{ secrets.HABIBI_KEYSTORE_PASSWORD }}
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk ../Habibi.apk
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/habibi.jks"
+            export HABIBI_KEYSTORE="$RUNNER_TEMP/habibi.jks"
+            ./gradlew assembleRelease --no-daemon
+            cp app/build/outputs/apk/release/app-release.apk ../Habibi.apk
+            rm -f "$RUNNER_TEMP/habibi.jks"
+          else
+            echo "::warning::Secret HABIBI_KEYSTORE_B64 is not set - using a temporary key. Phones can't install this as an update; add the secrets (see signing/README-KEEP-SAFE.txt on the PC)."
+            ./gradlew assembleDebug --no-daemon
+            cp app/build/outputs/apk/debug/app-debug.apk ../Habibi.apk
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

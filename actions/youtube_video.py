@@ -1,4 +1,5 @@
 #youtube_video.py
+from core import secure as _secure
 import json
 import re
 import sys
@@ -59,7 +60,7 @@ _YT_VIDEO_FILTER = "EgIQAQ%3D%3D"
 
 def _get_api_key() -> str:
     with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+        return _secure.reveal(json.load(f)["gemini_api_key"])
 
 
 def _open_url(url: str) -> None:

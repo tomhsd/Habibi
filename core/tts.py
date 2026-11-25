@@ -5,6 +5,7 @@ EdgeTTS     – free Microsoft TTS (internet required, no API key)
 Kokoro      – fully offline neural TTS (~330 MB model)
 ElevenLabs  – cloud API (API key required, best quality)
 """
+from core import secure as _secure
 from __future__ import annotations
 
 import asyncio
@@ -433,7 +434,7 @@ def create_tts_player(config: dict) -> TTSPlayer:
         speed  = float(config.get("tts_speed", 1.0))
         engine = KokoroTTSEngine(voice=voice, speed=speed)
     elif engine_name == "elevenlabs":
-        api_key  = config.get("elevenlabs_api_key", "")
+        api_key  = _secure.reveal(config.get("elevenlabs_api_key", ""))
         voice_id = config.get("tts_voice", "pNInz6obpgDQGcFmaJgB")
         engine   = ElevenLabsTTSEngine(api_key=api_key, voice_id=voice_id)
     else:   # edgetts (default)
