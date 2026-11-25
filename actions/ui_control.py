@@ -54,6 +54,18 @@ def _window(title: str = ""):
     return _desktop().window(handle=hwnd).wrapper_object()
 
 
+def _bring_front(win) -> None:
+    """Front the window without tapping Alt (Alt would open the app's menu bar)."""
+    try:
+        from actions.window_manager import focus_window
+        focus_window(win.handle)
+    except Exception:
+        try:
+            win.set_focus()
+        except Exception:
+            pass
+
+
 def _check_allowed(win) -> None:
     try:
         import psutil
@@ -132,6 +144,33 @@ def _find(win, name: str, control_type: str = ""):
     return best
 
 
+def _main_editable(win):
+    """The text box the user most likely means: the focused editable element,
+    otherwise the largest visible Edit/Document control of the window."""
+    try:
+        from pywinauto.uia_defines import IUIA
+        focused = IUIA().get_focused_element()
+        for el in _walk(win):
+            try:
+                if el.element_info.element == focused and _info(el)[1] in ("Edit", "Document"):
+                    return el
+            except Exception:
+                continue
+    except Exception:
+        pass
+    best, area = None, -1
+    for el in _walk(win):
+        if _info(el)[1] in ("Edit", "Document") and _visible(el):
+            try:
+                r = el.rectangle()
+                a = r.width() * r.height()
+            except Exception:
+                a = 0
+            if a > area:
+                best, area = el, a
+    return best
+
+
 def _escape_keys(text: str) -> str:
     out = []
     for ch in text:
@@ -193,7 +232,7 @@ def _click(win, name: str, control_type: str, double: bool, right: bool) -> str:
         safety.check_stop()
         before = A.snapshot()
         try:
-            win.set_focus()
+            _bring_front(win)
         except Exception:
             pass
         done = False
@@ -217,10 +256,10 @@ def _type(win, text: str, field: str, clear: bool, enter: bool) -> str:
         safety.check_stop()
         before = A.snapshot()
         try:
-            win.set_focus()
+            _bring_front(win)
         except Exception:
             pass
-        target = _find(win, field, "") if field else None
+        target = _find(win, field, "") if field else _main_editable(win)
         if field and target is None:
             return f"No field '{field}' found in '{win.window_text()}'."
         if target is not None:
@@ -240,6 +279,14 @@ def _type(win, text: str, field: str, clear: bool, enter: bool) -> str:
                 written = False
         if not written:
             from pywinauto.keyboard import send_keys
+            if target is not None:
+                try:
+                    target.set_focus()
+                except Exception:
+                    try:
+                        target.click_input()
+                    except Exception:
+                        pass
             if clear and target is not None:
                 send_keys("^a{BACKSPACE}")
             for i in range(0, len(text), 40):          # in pieces so STOP can interrupt
@@ -290,7 +337,7 @@ def ui_control(parameters: dict, player=None) -> str:
         _check_allowed(win)
         if action == "focus":
             before = A.snapshot()
-            win.set_focus()
+            _bring_front(win)
             return f"Brought '{win.window_text()}' to the front. " + A.describe_change(before, 0.25)
         if action == "list_elements":
             return _list_elements(win, str(parameters.get("query", "")), str(parameters.get("control_type", "")))

@@ -57,17 +57,35 @@ def _find(title: str) -> tuple[int, str]:
     raise LookupError(f"No open window matches '{title}'.")
 
 
-def _focus(hwnd: int) -> None:
+def focus_window(hwnd: int) -> None:
+    """Bring a window to the front reliably — without tapping Alt, which would
+    open the app's menu bar and turn the next typed letters into menu shortcuts."""
     import win32con
     import win32gui
+    u = _user32()
     if win32gui.IsIconic(hwnd):
         win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+    fg = u.GetForegroundWindow()
+    if fg == hwnd:
+        return
+    k32 = ctypes.windll.kernel32
+    me = k32.GetCurrentThreadId()
+    fg_tid = u.GetWindowThreadProcessId(fg, None)
+    attached = bool(fg_tid and fg_tid != me and u.AttachThreadInput(fg_tid, me, True))
     try:
-        # Alt press lets SetForegroundWindow work from a background process
-        _user32().keybd_event(0x12, 0, 0, 0)
-        win32gui.SetForegroundWindow(hwnd)
+        u.BringWindowToTop(hwnd)
+        u.SetForegroundWindow(hwnd)
     finally:
-        _user32().keybd_event(0x12, 0, 2, 0)
+        if attached:
+            u.AttachThreadInput(fg_tid, me, False)
+    if u.GetForegroundWindow() != hwnd:
+        # last resort: a harmless Shift tap unlocks SetForegroundWindow (Alt would open menus)
+        u.keybd_event(0x10, 0, 0, 0)
+        u.keybd_event(0x10, 0, 2, 0)
+        u.SetForegroundWindow(hwnd)
+
+
+_focus = focus_window
 
 
 def _place(hwnd: int, x: int, y: int, w: int, h: int) -> None:
