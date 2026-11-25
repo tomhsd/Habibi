@@ -1,5 +1,5 @@
 """
-actions/window_manager.py — find, arrange and snap windows (multi-monitor).
+plugins/window_manager.py — find, arrange and snap windows (multi-monitor).
 """
 from __future__ import annotations
 
@@ -150,7 +150,7 @@ def window_manager(parameters: dict, player=None) -> str:
         return str(e)
 
 
-TOOL = {
+PLUGIN = {
     "name": "window_manager",
     "description": (
         "Arrange windows precisely: list open windows, list monitors, focus (bring to front), "
@@ -171,5 +171,9 @@ TOOL = {
         },
         "required": ["action"],
     },
-    "handler": window_manager,
 }
+
+
+def run(parameters: dict, player=None, session_memory=None) -> str:
+    """Plugin entry point (switch this tool off in ⚙ PLUGINS)."""
+    return window_manager(parameters or {}, player=player)

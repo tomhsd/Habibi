@@ -1,5 +1,5 @@
 """
-actions/screen_text.py — read text on the screen and click it exactly (OCR).
+plugins/screen_text.py — read text on the screen and click it exactly (OCR).
 
 Uses the OCR engine built into Windows 10/11 (Windows.Media.Ocr — the languages
 you have installed in Windows, e.g. English, Arabic, Bangla if added), with
@@ -228,7 +228,7 @@ def screen_text(parameters: dict, player=None) -> str:
         return str(e)
 
 
-TOOL = {
+PLUGIN = {
     "name": "screen_text",
     "description": (
         "Read the text that is visible on the screen and click text EXACTLY where it is (OCR "
@@ -253,5 +253,9 @@ TOOL = {
         },
         "required": ["action"],
     },
-    "handler": screen_text,
 }
+
+
+def run(parameters: dict, player=None, session_memory=None) -> str:
+    """Plugin entry point (switch this tool off in ⚙ PLUGINS)."""
+    return screen_text(parameters or {}, player=player)

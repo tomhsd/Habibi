@@ -1,5 +1,5 @@
 """
-actions/system_tools.py — deeper Windows control: running programs, per-app
+plugins/system_tools.py — deeper Windows control: running programs, per-app
 volume, startup apps, cleaning temporary files, power plans, Bluetooth,
 battery, disks and network.
 """
@@ -322,7 +322,7 @@ def system_tools(parameters: dict, player=None) -> str:
         return f"Missing component: {e.name}"
 
 
-TOOL = {
+PLUGIN = {
     "name": "system_tools",
     "description": (
         "Deeper Windows control. processes — what uses the most CPU/RAM (sort cpu|memory); "
@@ -345,5 +345,9 @@ TOOL = {
         },
         "required": ["action"],
     },
-    "handler": system_tools,
 }
+
+
+def run(parameters: dict, player=None, session_memory=None) -> str:
+    """Plugin entry point (switch this tool off in ⚙ PLUGINS)."""
+    return system_tools(parameters or {}, player=player)

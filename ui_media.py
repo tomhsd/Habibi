@@ -12,7 +12,7 @@ ui_media.py — Habibi's built-in audio/video player (no browser).
                   the reactor pulses with the music. Your own colour comes back
                   when playback stops or pauses.
 
-The AI controls it through actions/media_player.py → HabibiUI.media().
+The AI controls it through plugins/media_player.py → HabibiUI.media().
 """
 from __future__ import annotations
 
@@ -99,10 +99,15 @@ class MediaEngine(QObject):
         self._peak_avg = 0.05
         self._setup_analysis()
 
+        self.src = None                # an external source from a plugin (see attach_source)
+        self.mode = "local"            # local | external
+        self.video_on_screen = False   # set by the window when the video page is showing
         self.player.mediaStatusChanged.connect(self._on_status)
         self.player.playbackStateChanged.connect(lambda *_: self.changed.emit())
-        self.player.positionChanged.connect(lambda p: self.position.emit(p, self.player.duration()))
-        self.player.durationChanged.connect(lambda d: self.position.emit(self.player.position(), d))
+        self.player.positionChanged.connect(
+            lambda p: self.mode == "local" and self.position.emit(p, self.player.duration()))
+        self.player.durationChanged.connect(
+            lambda d: self.mode == "local" and self.position.emit(self.player.position(), d))
         self.player.errorOccurred.connect(self._on_error)
         self.player.hasVideoChanged.connect(lambda *_: self.changed.emit())
 
@@ -203,11 +208,44 @@ class MediaEngine(QObject):
                        float(self.bands[10:].mean()), min(1.0, peak))
         return self.levels
 
+    # ── external sources (plugins, e.g. plugins/youtube_player.py) ──────────
+    # A source is a QObject with signals changed(), position(int ms, int ms),
+    # error(str), attributes name / tag / view (QWidget shown in the video page)
+    # and methods load(target), toggle, pause, stop, next()->bool,
+    # previous()->bool, play_index(i), seek(ms), set_volume(pct), duck(on),
+    # playing(), paused(), loading(), title(), status_text(), position_ms(),
+    # count(), index(), item_titles()->list[str], link()->str.
+    def attach_source(self, src) -> None:
+        self.src = src
+        src.changed.connect(lambda: self.mode == "external" and self.changed.emit())
+        src.position.connect(lambda p, d: self.mode == "external" and self.position.emit(p, d))
+        src.error.connect(self.error.emit)
+        src.set_volume(self._vol)
+
+    def is_external(self) -> bool:
+        return self.mode == "external" and self.src is not None
+
+    def play_external(self, target) -> None:
+        if self.src is None:
+            raise RuntimeError("No external media source is installed.")
+        self.player.stop()
+        self.mode = "external"
+        self.src.load(target)
+        self.changed.emit()
+
+    def position_ms(self) -> int:
+        if self.is_external():
+            return self.src.position_ms()
+        return self.player.position()
+
     # ── playlist ─────────────────────────────────────────────────────────────
     def load(self, paths, play: bool = True, append: bool = False) -> int:
         files = collect(paths)
         if not files:
             return 0
+        if self.is_external():
+            self.src.stop()
+            self.mode = "local"
         if append and self.playlist:
             self.playlist.extend(files)
         else:
@@ -236,6 +274,9 @@ class MediaEngine(QObject):
         return self.repeat
 
     def play_index(self, i: int) -> None:
+        if self.is_external():
+            self.src.play_index(i)
+            return
         if not (0 <= i < len(self.playlist)):
             return
         self.index = i
@@ -256,15 +297,22 @@ class MediaEngine(QObject):
         return True
 
     def next(self) -> bool:
+        if self.is_external():
+            return self.src.next()
         return self._step(1)
 
     def previous(self) -> bool:
+        if self.is_external():
+            return self.src.previous()
         if self.player.position() > 4000:
             self.player.setPosition(0)
             return True
         return self._step(-1)
 
     def toggle(self) -> None:
+        if self.is_external():
+            self.src.toggle()
+            return
         if self.playing():
             self.player.pause()
         elif self.index >= 0:
@@ -272,11 +320,23 @@ class MediaEngine(QObject):
         elif self.playlist:
             self.play_index(0)
 
+    def pause(self) -> None:
+        if self.is_external():
+            self.src.pause()
+        else:
+            self.player.pause()
+        self.changed.emit()
+
     def stop(self) -> None:
+        if self.is_external():
+            self.src.stop()
         self.player.stop()
         self.changed.emit()
 
     def seek(self, ms: int) -> None:
+        if self.is_external():
+            self.src.seek(ms)
+            return
         self.player.setPosition(max(0, int(ms)))
 
     def set_volume(self, pct: int) -> None:
@@ -293,24 +353,35 @@ class MediaEngine(QObject):
 
     def _apply_volume(self) -> None:
         self.audio.setVolume(self._vol / 100.0 * (0.25 if self._duck else 1.0))
+        if self.src is not None:
+            self.src.set_volume(self._vol)
+            self.src.duck(self._duck)
 
     def volume(self) -> int:
         return self._vol
 
     # ── state ────────────────────────────────────────────────────────────────
     def playing(self) -> bool:
+        if self.is_external():
+            return self.src.playing()
         return self.player.playbackState() == self._QMP.PlaybackState.PlayingState
 
     def paused(self) -> bool:
+        if self.is_external():
+            return self.src.paused()
         return self.player.playbackState() == self._QMP.PlaybackState.PausedState
 
     def has_video(self) -> bool:
+        if self.is_external():
+            return True
         return bool(self.player.hasVideo())
 
     def current(self) -> Path | None:
         return self.playlist[self.index] if 0 <= self.index < len(self.playlist) else None
 
     def title(self) -> str:
+        if self.is_external():
+            return self.src.title()
         try:
             from PyQt6.QtMultimedia import QMediaMetaData
             md = self.player.metaData()
@@ -325,6 +396,8 @@ class MediaEngine(QObject):
         return c.stem if c else ""
 
     def status_text(self) -> str:
+        if self.is_external():
+            return self.src.status_text()
         c = self.current()
         if c is None:
             return "Nothing is loaded."
@@ -336,6 +409,8 @@ class MediaEngine(QObject):
                 f"shuffle {'on' if self.shuffle else 'off'}, repeat {self.repeat}.")
 
     def _on_status(self, status) -> None:
+        if self.mode != "local":
+            return
         if status == self._QMP.MediaStatus.EndOfMedia:
             if self.repeat == "one":
                 self.player.setPosition(0)
@@ -434,7 +509,7 @@ class RgbAnimator(QObject):
             pass
         self.spec.hue = self.hue
         self.spec.update()
-        want = self.enabled and self.e.playing() and not self.e.has_video()
+        want = self.enabled and self.e.playing() and not (self.e.has_video() and self.e.video_on_screen)
         if want:
             if not self.active:
                 self.active = True
@@ -549,7 +624,7 @@ class MediaCard(U.CornerCard):
 
         opt = QHBoxLayout(); opt.setSpacing(4)
         self.b_files = _btn("📂 FILES", "Open audio or video files")
-        self.b_folder = _btn("📁 FOLDER", "Play a whole folder")
+        self.b_folder = _btn("📁", "Play a whole folder", 30)
         self.b_list = _btn("☰", "Show playlist", 30); self.b_list.setCheckable(True)
         self.b_rgb = _btn("🌈", "RGB colours with the music", 30); self.b_rgb.setCheckable(True)
         self.b_rgb.setChecked(True)
@@ -557,6 +632,7 @@ class MediaCard(U.CornerCard):
         self.b_vid.setChecked(True); self.b_vid.setVisible(False)
         for b in (self.b_files, self.b_folder, self.b_list, self.b_rgb, self.b_vid):
             opt.addWidget(b)
+        self._opt_row = opt
         lay.addLayout(opt)
         self.b_files.clicked.connect(self._open_files)
         self.b_folder.clicked.connect(self._open_folder)
@@ -621,10 +697,43 @@ class MediaCard(U.CornerCard):
             if not n:
                 self.now.setText("No audio or video in that folder.")
 
+    def add_source_button(self, text: str, tip: str, callback, width: int = 0) -> QPushButton:
+        """For plugins: put a button on the card (next to FILES / folder)."""
+        b = _btn(text, tip, width)
+        b.clicked.connect(callback)
+        self._opt_row.insertWidget(2, b)
+        return b
+
+    def _refresh_external(self):
+        e, src = self.e, self.e.src
+        playing = e.playing()
+        self.now.setText(self.fontMetrics().elidedText(
+            "▶ " + (e.title() or f"Loading from {src.name}…"), Qt.TextElideMode.ElideRight, 260))
+        self.now.setToolTip(src.link())
+        state = ("LOADING" if src.loading() else "PLAYING" if playing else
+                 "PAUSED" if e.paused() else "STOPPED")
+        self.set_extra(f"{src.tag} {state}  {src.index() + 1}/{src.count()}",
+                       U.C.RED if playing else U.C.ACC2)
+        titles = src.item_titles()
+        key = ("ext", tuple(titles))
+        if key != self._last_list:
+            self._last_list = key
+            self.listw.clear()
+            for i, t in enumerate(titles[:500]):
+                QListWidgetItem(f"{i + 1:>3}. {t}", self.listw)
+        if 0 <= src.index() < self.listw.count():
+            self.listw.setCurrentRow(src.index())
+
     def refresh(self):
         e = self.e
         playing = e.playing()
         self.b_play.setText("⏸" if playing else "▶")
+        if e.is_external():
+            self._refresh_external()
+            self.vol_lbl.setText(f"🔊 {e.volume()}")
+            self.b_vid.setVisible(True)
+            self.want_video.emit(self.b_vid.isChecked())
+            return
         c = e.current()
         if c is None:
             self.set_extra("IDLE", U.C.TEXT_DIM)
@@ -654,7 +763,7 @@ class MediaCard(U.CornerCard):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Commands from the AI (actions/media_player.py)
+#  Commands from the AI (plugins/media_player.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_command(engine: MediaEngine, card: MediaCard, rgb: RgbAnimator, cmd: str, a: dict) -> str:
@@ -674,7 +783,7 @@ def run_command(engine: MediaEngine, card: MediaCard, rgb: RgbAnimator, cmd: str
             engine.toggle()
         return engine.status_text()
     if cmd in ("pause",):
-        engine.player.pause(); return engine.status_text()
+        engine.pause(); return engine.status_text()
     if cmd in ("resume",):
         if not engine.playing():
             engine.toggle()
@@ -684,6 +793,8 @@ def run_command(engine: MediaEngine, card: MediaCard, rgb: RgbAnimator, cmd: str
     if cmd == "stop":
         engine.stop(); return "Stopped."
     def _now() -> str:
+        if engine.is_external():
+            return f"Skipping on {engine.src.name}."
         c = engine.current()
         return f"Now playing {c.name} — track {engine.index + 1} of {len(engine.playlist)}." if c else "Nothing is loaded."
     if cmd == "next":
@@ -693,7 +804,7 @@ def run_command(engine: MediaEngine, card: MediaCard, rgb: RgbAnimator, cmd: str
     if cmd == "seek":
         sec = float(a.get("seconds", 0))
         if a.get("relative"):
-            engine.seek(engine.player.position() + sec * 1000)
+            engine.seek(engine.position_ms() + sec * 1000)
         else:
             engine.seek(sec * 1000)
         return engine.status_text()
@@ -720,6 +831,18 @@ def run_command(engine: MediaEngine, card: MediaCard, rgb: RgbAnimator, cmd: str
         rgb.enabled = on
         card.b_rgb.setChecked(on)
         return f"RGB colours {'on' if on else 'off'}."
+    if cmd == "list" and engine.is_external():
+        titles = engine.src.item_titles()
+        if len(titles) <= 1:
+            return engine.status_text()
+        rows = [f"{'▶' if i == engine.src.index() else ' '} {i + 1}. {t}" for i, t in enumerate(titles[:40])]
+        return (f"{engine.src.name} playlist:\n" + "\n".join(rows) +
+                (f"\n… {len(titles) - 40} more" if len(titles) > 40 else ""))
+    if cmd == "play_index" and engine.is_external():
+        i = int(a.get("index", 1)) - 1
+        if not 0 <= i < engine.src.count():
+            return f"There is no video {i + 1} in this playlist."
+        engine.play_index(i); return f"Playing video {i + 1} of the playlist."
     if cmd == "list":
         if not engine.playlist:
             return "The playlist is empty."

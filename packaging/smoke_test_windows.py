@@ -24,6 +24,7 @@ os.chdir(ROOT)
 
 from core import safety  # noqa: E402
 from core.action_loader import discover_actions  # noqa: E402
+from core.plugin_loader import discover_plugins  # noqa: E402
 
 results: list[tuple[str, bool, str]] = []
 
@@ -40,12 +41,14 @@ def check(name: str, fn):
 # allow everything without the HUD confirm (no UI in CI), no blocked apps
 safety.save({"level": "free", "speed": "fast", "blocked_apps": [], "blocked_folders": []})
 reg = discover_actions(ROOT / "actions", set())
-run = lambda tool, **p: reg.run(tool, p, {})
+plugs = discover_plugins(ROOT / "plugins", reg.names(), logger=print)
+run = lambda tool, **p: plugs.run(tool, p) if plugs.has(tool) else reg.run(tool, p, {})
 
-check("all tools load", lambda: (
-    all(n in [d["name"] for d in reg.get_tool_declarations()] for n in
-        ["ui_control", "screen_text", "window_manager", "office", "macro", "system_tools",
-         "find_files", "clipboard_history", "screen_recorder"]), "ok"))
+_CONTROL = ["ui_control", "screen_text", "window_manager", "office", "macro", "system_tools",
+            "find_files", "clipboard_history", "screen_recorder", "media_player"]
+check("PC-control tools load as plugins", lambda: (
+    all(plugs.has(n) for n in _CONTROL), [r.name + ("" if r.valid else f" ✗ {r.error}") for r in plugs._all_records]))
+check("…and no longer as core actions", lambda: (not any(reg.has(n) for n in _CONTROL), "ok"))
 
 np = subprocess.Popen(["notepad.exe"])
 time.sleep(3)
@@ -69,7 +72,7 @@ safety.save({"level": "free", "speed": "fast", "blocked_apps": ["notepad"], "blo
 check("blocked app is refused", lambda: ("blocked" in (r := run("ui_control", action="type", window="Notepad", text="x")).lower(), r))
 safety.save({"level": "free", "speed": "fast", "blocked_apps": [], "blocked_folders": []})
 safety.emergency_stop(2)
-check("emergency stop blocks tools", lambda: ("Emergency stop" in (r := run("system_tools", action="disks")), r))
+check("emergency stop blocks tools (plugins too)", lambda: ("Emergency stop" in (r := run("system_tools", action="disks")), r))
 time.sleep(2.2)
 
 docs = Path.home() / "Documents"
@@ -95,6 +98,10 @@ check("screen_recorder stop saves mp4", lambda: ("Recording saved" in (r := run(
 
 check("macro list", lambda: ("macro" in (r := run("macro", action="list")).lower(), r))
 check("office handles missing Office", lambda: (bool(r := run("office", app="excel", action="read")), r))
+from memory.config_manager import save_plugin_enabled as set_plugin_enabled  # noqa: E402
+set_plugin_enabled("find_files", False)
+check("a plugin can be switched off", lambda: ("disabled" in (r := run("find_files", action="search", name="x")), r))
+set_plugin_enabled("find_files", True)
 check("activity log written", lambda: (safety.LOG_FILE.exists() and safety.LOG_FILE.stat().st_size > 100,
                                          f"{safety.LOG_FILE.stat().st_size if safety.LOG_FILE.exists() else 0} bytes"))
 
@@ -124,6 +131,20 @@ check("computer_control type (Bangla) with Habibi in front goes to Notepad",
 time.sleep(0.5)
 check("…Bangla text arrived intact", lambda: ("আমি-ঠিক-আছি" in (r := run("ui_control", action="read", window="Notepad")), r[-200:]))
 hud.destroy()
+
+# plugin manager: install / reload / remove with no restart (temp folder, not the real one)
+import tempfile  # noqa: E402
+_pd = Path(tempfile.mkdtemp()); _src = Path(tempfile.mkdtemp())
+(_src / "demo_plug.py").write_text(
+    'PLUGIN={"name":"demo_plug","description":"demo","parameters":{"type":"OBJECT","properties":{}}}\n'
+    'def run(parameters): return "demo-ok"\n', encoding="utf-8")
+(_src / "broken_plug.py").write_text("x = \n", encoding="utf-8")
+_reg = discover_plugins(_pd, reg.names(), logger=lambda m: None)
+check("plugin install loads it at once", lambda: (_reg.install(str(_src / "demo_plug.py"))["ok"] and _reg.run("demo_plug", {}) == "demo-ok", ""))
+check("broken plugin refused, folder unchanged", lambda: (not _reg.install(str(_src / "broken_plug.py"))["ok"] and not (_pd / "broken_plug.py").exists(), ""))
+(_pd / "dropped_in.py").write_text((_src / "demo_plug.py").read_text().replace("demo_plug", "dropped_in"), encoding="utf-8")
+check("reload picks up a copied-in file", lambda: ("dropped_in" in _reg.reload()["added"] and _reg.has("dropped_in"), ""))
+check("remove takes it out at once", lambda: (_reg.remove("demo_plug.py")["ok"] and not _reg.has("demo_plug") and (_pd / "_removed").is_dir(), ""))
 
 np.kill()
 probe.unlink(missing_ok=True)

@@ -2,7 +2,7 @@
 examples/screen_control_demo.py — how Habibi sees and controls the screen.
 
 A short, self-contained walk-through of the three layers Habibi uses
-(the full versions live in actions/ui_control.py, actions/screen_text.py
+(the full versions live in plugins/ui_control.py, plugins/screen_text.py
 and core/automation.py):
 
   1. CAPTURE   — take a screenshot (mss) and read the UI Automation tree

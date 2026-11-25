@@ -517,6 +517,8 @@ class HabibiLive:
         self.ui.get_plugins = self._plugin_registry.list_for_ui
         self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
+        self._plugin_registry.run_ui_setup(self.ui)   # plugins: optional setup_ui(player)
+        self.ui.plugin_admin = self._plugin_admin     # ➕ install / 🗑 remove / ↻ reload, no restart
 
         # ── Wake word ────────────────────────────────────────────────────────
         # _awake gates the mic (see _listen_audio) and the background speakers.
@@ -643,6 +645,33 @@ class HabibiLive:
             asyncio.run_coroutine_threadsafe(_say(), loop)
         except Exception as e:
             print(f"[PluginSay] {e}")
+
+    def _plugin_admin(self, op: str, arg: str = "") -> dict:
+        """PLUGINS panel: install / remove / reload without restarting Habibi.
+        Runs on the Qt thread. When the set of tools changed, the Live session
+        is rebuilt (conversation kept) so Gemini sees the new tool list."""
+        reg = self._plugin_registry
+        before = {d["name"] for d in reg.get_tool_declarations()}
+        try:
+            if op == "install":
+                res = reg.install(arg)
+            elif op == "remove":
+                res = reg.remove(arg)
+            else:
+                ch = reg.reload()
+                bits = [f"{k}: {', '.join(v)}" for k, v in ch.items() if v]
+                res = {"ok": True, "message": "Reloaded" + (" — " + "; ".join(bits) if bits else " — nothing changed.")}
+        except Exception as e:
+            return {"ok": False, "message": f"Failed: {e}"}
+        try:
+            reg.run_ui_setup(self.ui)
+        except Exception as e:
+            print(f"[Plugins] setup_ui after {op}: {e}")
+        after = {d["name"] for d in reg.get_tool_declarations()}
+        if after != before:
+            self.request_reconnect(keep_context=True, reason="plugins changed")
+            res["message"] += " Habibi is refreshing its tools."
+        return res
 
     def request_reconnect(self, keep_context: bool = True, reason: str = ""):
         """Thread-safe: ask the run loop to tear down and rebuild the Live

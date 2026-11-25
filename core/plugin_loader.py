@@ -12,6 +12,7 @@ import importlib.util
 import inspect
 import re
 import sys
+import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,6 +34,8 @@ class PluginRecord:
     valid: bool = False
     error: str = ""
     settings: Optional[dict] = None   # optional PLUGIN_SETTINGS schema (config fields)
+    ui_setup: Optional[Callable] = None   # optional setup_ui(player): runs once on the Qt thread
+    mtime: float = 0.0
 
 
 class PluginRegistry:
@@ -40,6 +43,105 @@ class PluginRegistry:
         self._plugins = plugins          # name -> PluginRecord, VALID entries only
         self._all_records: list[PluginRecord] = []   # valid + invalid, for UI listing
         self._logger = logger
+        self._dir: Optional[Path] = None
+        self._core: set[str] = set()
+        self._ui_done: set[str] = set()   # plugins whose setup_ui already ran
+
+
+    # -- live management: no restart needed -------------------------------
+    def reload(self, initial: bool = False) -> dict:
+        """Re-scan the plugins folder. New or edited files are imported, files
+        that vanished are dropped, untouched plugins keep running as they are.
+        Returns {"added": [...], "removed": [...], "changed": [...]}."""
+        if self._dir is None:
+            return {"added": [], "removed": [], "changed": []}
+        self._dir.mkdir(parents=True, exist_ok=True)
+        old = {r.file: r for r in self._all_records}
+        files = [p for p in sorted(self._dir.glob("*.py"), key=lambda p: p.name)
+                 if not p.name.startswith("_")]
+        valid: dict[str, PluginRecord] = {}
+        records: list[PluginRecord] = []
+        added, changed = [], []
+        for path in files:
+            prev = old.get(path.name)
+            try:
+                mt = path.stat().st_mtime
+            except OSError:
+                continue
+            if prev is not None and prev.mtime == mt and (not prev.valid or prev.name not in valid):
+                rec = prev
+            else:
+                rec = _load_file(path, self._core, valid)
+                if prev is None:
+                    added.append(rec.name)
+                else:
+                    changed.append(rec.name)
+                if not initial:
+                    self._logger(f"Plugin {'loaded' if rec.valid else 'rejected'}: "
+                                 f"{path.name}" + ("" if rec.valid else f" — {rec.error}"))
+            records.append(rec)
+            if rec.valid:
+                valid[rec.name] = rec
+                if initial:
+                    self._logger(f"Plugin loaded: {rec.name} ({path.name})")
+            elif initial:
+                self._logger(f"Plugin rejected: {path.name} — {rec.error}")
+        gone = [r.name for f, r in old.items()
+                if f not in {p.name for p in files} and r.valid]
+        for f in old:
+            if f not in {p.name for p in files}:
+                sys.modules.pop(f"plugins.{Path(f).stem}", None)
+        self._plugins.clear()
+        self._plugins.update(valid)
+        self._all_records = records
+        if initial:
+            self._logger(f"Plugin discovery complete: {len(valid)} active, "
+                         f"{len(records) - len(valid)} rejected, {len(records)} total.")
+        return {"added": added, "removed": gone, "changed": changed}
+
+    def install(self, src_path: str) -> dict:
+        """Copy a .py file into the plugins folder and load it now. If the file
+        turns out not to be a valid plugin the folder is put back as it was."""
+        import shutil
+        src = Path(src_path)
+        if self._dir is None or not src.is_file() or src.suffix.lower() != ".py":
+            return {"ok": False, "message": "Pick a .py plugin file."}
+        if src.name.startswith("_"):
+            return {"ok": False, "message": "File names starting with '_' are ignored by the loader."}
+        dest = self._dir / src.name
+        backup = None
+        if dest.exists():
+            backup = self._dir / "_removed" / f"{dest.stem}.{int(time.time())}.bak"
+            backup.parent.mkdir(exist_ok=True)
+            shutil.move(str(dest), str(backup))
+        shutil.copyfile(str(src), str(dest))
+        self.reload()
+        rec = next((r for r in self._all_records if r.file == dest.name), None)
+        if rec is None or not rec.valid:
+            err = rec.error if rec else "unknown error"
+            dest.unlink(missing_ok=True)
+            if backup is not None:
+                shutil.move(str(backup), str(dest))
+            self.reload()
+            return {"ok": False, "message": f"Not installed — {err}"}
+        return {"ok": True, "name": rec.name,
+                "message": f"Installed '{rec.name}'" + (" (replaced the old version)." if backup else ".")}
+
+    def remove(self, name: str) -> dict:
+        """Take a plugin out of service now. The file moves to plugins/_removed/
+        so it can be put back by hand."""
+        import shutil
+        rec = next((r for r in self._all_records if r.file == name or r.name == name), None)
+        if rec is None or self._dir is None:
+            return {"ok": False, "message": f"No plugin called '{name}'."}
+        src = self._dir / rec.file
+        if src.exists():
+            dst = self._dir / "_removed" / f"{src.stem}.{int(time.time())}.py"
+            dst.parent.mkdir(exist_ok=True)
+            shutil.move(str(src), str(dst))
+        self.reload()
+        return {"ok": True, "name": name,
+                "message": f"Removed '{name}'. Its file is in plugins/_removed/."}
 
     # -- called by main.py at LiveConnectConfig build time --
     def get_tool_declarations(self) -> list[dict]:
@@ -63,12 +165,46 @@ class PluginRegistry:
             return f"Plugin '{name}' is not available."
         if not get_plugin_enabled(name):
             return f"The '{name}' plugin is currently disabled."
+        # Core safety supervises every plugin: emergency stop, blocked apps/folders
+        # (PermissionError) and the activity log — plugins can't switch these off.
+        from core import safety
+        if safety.stopped():
+            return "🛑 Emergency stop is active — wait a few seconds, then ask again."
         try:
-            return _call_run(rec.run, parameters, player, session_memory) or "Done."
+            result = _call_run(rec.run, parameters, player, session_memory) or "Done."
+        except safety.Stopped:
+            result = "🛑 Stopped by the emergency stop (Ctrl+Alt+Q)."
+        except PermissionError as e:
+            result = f"Not allowed: {e}"
         except Exception as e:
             self._logger(f"Plugin '{name}' crashed during run(): {e}")
             traceback.print_exc()
-            return f"Sir, the '{name}' plugin failed: {e}"
+            result = f"Sir, the '{name}' plugin failed: {e}"
+        try:
+            safety.log_activity(name, parameters, str(result))
+        except Exception:
+            pass
+        return result
+
+    # -- called by main.py once the window exists --
+    def run_ui_setup(self, player) -> None:
+        """Call each enabled plugin's optional setup_ui(player) on the Qt thread,
+        so a plugin can add buttons or views to the interface. Never raises."""
+        if player is None:
+            return
+        for name, rec in self._plugins.items():
+            if rec.ui_setup is None or name in self._ui_done or not get_plugin_enabled(name):
+                continue
+            self._ui_done.add(name)
+            try:
+                runner = getattr(player, "run_in_ui", None)
+                if runner is not None:
+                    runner(lambda f=rec.ui_setup: f(player))
+                else:
+                    rec.ui_setup(player)
+            except Exception as e:
+                self._logger(f"Plugin '{name}' setup_ui failed: {e}")
+                traceback.print_exc()
 
     # -- called by ui.py's settings tab to render per-plugin config forms --
     def settings_schemas(self) -> list[dict]:
@@ -158,8 +294,47 @@ def _validate(module, filename: str) -> PluginRecord:
     if not (isinstance(settings, dict) and isinstance(settings.get("fields"), list)):
         settings = None
 
+    ui_setup = getattr(module, "setup_ui", None)
+    if not callable(ui_setup):
+        ui_setup = None
+
     return PluginRecord(name=name, description=description.strip(), parameters=parameters,
-                         run=run_fn, file=filename, valid=True, error="", settings=settings)
+                         run=run_fn, file=filename, valid=True, error="", settings=settings,
+                         ui_setup=ui_setup)
+
+
+def _load_file(path: Path, core_tool_names: set[str], valid: dict) -> PluginRecord:
+    """Import one plugin file and validate it. Never raises."""
+    try:
+        module_name = f"plugins.{path.stem}"
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError("could not build import spec")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(module_name, None)
+            raise
+
+        rec = _validate(module, path.name)
+
+        if rec.valid and rec.name in core_tool_names:
+            rec = PluginRecord(name=rec.name, file=path.name,
+                                error=f"Name '{rec.name}' collides with a core tool — rejected.")
+        elif rec.valid and rec.name in valid:
+            other = valid[rec.name].file
+            rec = PluginRecord(name=rec.name, file=path.name,
+                                error=f"Name '{rec.name}' already used by plugin '{other}' — rejected.")
+    except Exception as e:
+        rec = PluginRecord(name=path.stem, file=path.name, error=f"Failed to load: {e}")
+        traceback.print_exc()
+    try:
+        rec.mtime = path.stat().st_mtime
+    except OSError:
+        pass
+    return rec
 
 
 def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
@@ -172,50 +347,8 @@ def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
     of remaining files.
     """
     plugins_dir.mkdir(parents=True, exist_ok=True)
-    valid: dict[str, PluginRecord] = {}
-    all_records: list[PluginRecord] = []
-
-    files = sorted(plugins_dir.glob("*.py"), key=lambda p: p.name)  # deterministic order
-    for path in files:
-        if path.name.startswith("_"):
-            continue
-        try:
-            module_name = f"plugins.{path.stem}"
-            spec = importlib.util.spec_from_file_location(module_name, path)
-            if spec is None or spec.loader is None:
-                raise ImportError("could not build import spec")
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
-            try:
-                spec.loader.exec_module(module)
-            except Exception:
-                sys.modules.pop(module_name, None)
-                raise
-
-            rec = _validate(module, path.name)
-
-            if rec.valid and rec.name in core_tool_names:
-                rec = PluginRecord(name=rec.name, file=path.name,
-                                    error=f"Name '{rec.name}' collides with a core tool — rejected.")
-            elif rec.valid and rec.name in valid:
-                other = valid[rec.name].file
-                rec = PluginRecord(name=rec.name, file=path.name,
-                                    error=f"Name '{rec.name}' already used by plugin '{other}' — rejected.")
-
-        except Exception as e:
-            rec = PluginRecord(name=path.stem, file=path.name,
-                                error=f"Failed to load: {e}")
-            traceback.print_exc()
-
-        all_records.append(rec)
-        if rec.valid:
-            valid[rec.name] = rec
-            logger(f"Plugin loaded: {rec.name} ({path.name})")
-        else:
-            logger(f"Plugin rejected: {path.name} — {rec.error}")
-
-    registry = PluginRegistry(valid, logger)
-    registry._all_records = all_records
-    logger(f"Plugin discovery complete: {len(valid)} active, "
-           f"{len(all_records) - len(valid)} rejected, {len(all_records)} total.")
+    registry = PluginRegistry({}, logger)
+    registry._dir = plugins_dir
+    registry._core = set(core_tool_names)
+    registry.reload(initial=True)
     return registry

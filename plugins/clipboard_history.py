@@ -1,5 +1,5 @@
 """
-actions/clipboard_history.py — remembers the last 30 things you copied.
+plugins/clipboard_history.py — remembers the last 30 things you copied.
 
 "Paste what I copied 5 minutes ago", "show my clipboard history". The history
 lives only in memory (never saved to disk) and nothing is recorded while a
@@ -94,7 +94,7 @@ def clipboard_history(parameters: dict, player=None) -> str:
     return "Actions: list, copy(index), paste(index), clear."
 
 
-TOOL = {
+PLUGIN = {
     "name": "clipboard_history",
     "description": (
         "History of the last 30 things the user copied (text). list — show them (1 = newest); "
@@ -109,5 +109,9 @@ TOOL = {
         },
         "required": ["action"],
     },
-    "handler": clipboard_history,
 }
+
+
+def run(parameters: dict, player=None, session_memory=None) -> str:
+    """Plugin entry point (switch this tool off in ⚙ PLUGINS)."""
+    return clipboard_history(parameters or {}, player=player)

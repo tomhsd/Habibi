@@ -1,5 +1,5 @@
 """
-actions/screen_recorder.py — record the screen to an MP4 video.
+plugins/screen_recorder.py — record the screen to an MP4 video.
 
 "Start recording the screen" / "stop recording". Videos go to
 Videos\\Habibi Recordings. Uses the ffmpeg that ships with Habibi
@@ -91,7 +91,7 @@ def screen_recorder(parameters: dict, player=None) -> str:
     return "Not recording."
 
 
-TOOL = {
+PLUGIN = {
     "name": "screen_recorder",
     "description": (
         "Record the whole screen to an MP4 video (saved in Videos\\Habibi Recordings). "
@@ -106,5 +106,9 @@ TOOL = {
         },
         "required": ["action"],
     },
-    "handler": screen_recorder,
 }
+
+
+def run(parameters: dict, player=None, session_memory=None) -> str:
+    """Plugin entry point (switch this tool off in ⚙ PLUGINS)."""
+    return screen_recorder(parameters or {}, player=player)
