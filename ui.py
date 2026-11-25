@@ -4000,6 +4000,7 @@ class MainWindow(QMainWindow):
     _confirm_hide_sig = pyqtSignal()
     _wake_dl_sig    = pyqtSignal(bool, str)  # wake-word install finished (ok, message)
     _media_sig      = pyqtSignal(object)     # (cmd, args, holder, event) from the AI → media player
+    _plugin_card_sig = pyqtSignal(str, object)  # (plugin name, factory) → card in the left rail
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -4169,6 +4170,7 @@ class MainWindow(QMainWindow):
         self._clipboard_sig.connect(self._show_clipboard_panel)
         self._wake_dl_sig.connect(self._on_wake_install_done)
         self._media_sig.connect(self._on_media_cmd)
+        self._plugin_card_sig.connect(self._add_plugin_card)
         self._cam_stop = threading.Event()
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
@@ -4324,6 +4326,10 @@ class MainWindow(QMainWindow):
             lay.addWidget(self._media_card)
         except Exception as e:
             print(f"[Media] player unavailable: {e}")
+
+        # ── PLUGIN CARDS (sidebar_card() hook) go here, under the media player ──
+        self._left_lay = lay
+        self._plugin_card_at = lay.count()
 
         # ── CPU ──────────────────────────────────────────────────────────────
         cpu_card = CornerCard("CPU")
@@ -4754,6 +4760,18 @@ class MainWindow(QMainWindow):
     # ══════════════════════════════════════════════════════════════════════
     #  Media player: video page + RGB animation + AI commands
     # ══════════════════════════════════════════════════════════════════════
+
+    def _add_plugin_card(self, name: str, factory) -> None:
+        """Build a plugin's sidebar card on the Qt thread and put it in the left
+        rail under the media player. A failing card never breaks the window."""
+        try:
+            card = factory()
+            if card is None:
+                return
+            self._left_lay.insertWidget(self._plugin_card_at, card)
+            self._plugin_card_at += 1
+        except Exception as e:
+            print(f"[Plugins] sidebar card of '{name}' failed: {e}")
 
     def _build_media_video(self) -> None:
         self._media_rgb = None
@@ -6185,6 +6203,10 @@ class HabibiUI:
     @on_audio_device_change.setter
     def on_audio_device_change(self, cb):
         self._win.on_audio_device_change = cb
+
+    def add_sidebar_card(self, name: str, factory) -> None:
+        """Thread-safe: add a plugin's card (factory() -> QWidget) to the left rail."""
+        self._win._plugin_card_sig.emit(name, factory)
 
     def media(self, cmd: str, **args) -> str:
         """Thread-safe: control the built-in media player from an action thread."""

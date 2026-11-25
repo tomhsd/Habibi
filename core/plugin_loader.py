@@ -33,6 +33,7 @@ class PluginRecord:
     valid: bool = False
     error: str = ""
     settings: Optional[dict] = None   # optional PLUGIN_SETTINGS schema (config fields)
+    ui_card: Optional[Callable] = None  # optional sidebar_card() -> QWidget for the left rail
 
 
 class PluginRegistry:
@@ -96,6 +97,13 @@ class PluginRegistry:
             })
         return out
 
+    # -- called by main.py once the window exists: sidebar cards from plugins --
+    def sidebar_cards(self) -> list[tuple[str, Callable]]:
+        """(name, factory) for each enabled plugin that defines sidebar_card().
+        The factory is called on the Qt thread and returns a QWidget."""
+        return [(name, rec.ui_card) for name, rec in self._plugins.items()
+                if rec.ui_card and get_plugin_enabled(name)]
+
     # -- called by ui.py's Plugin Manager overlay --
     def list_for_ui(self) -> list[dict]:
         out = []
@@ -158,8 +166,13 @@ def _validate(module, filename: str) -> PluginRecord:
     if not (isinstance(settings, dict) and isinstance(settings.get("fields"), list)):
         settings = None
 
+    ui_card = getattr(module, "sidebar_card", None)   # optional left-rail card factory
+    if not callable(ui_card):
+        ui_card = None
+
     return PluginRecord(name=name, description=description.strip(), parameters=parameters,
-                         run=run_fn, file=filename, valid=True, error="", settings=settings)
+                         run=run_fn, file=filename, valid=True, error="", settings=settings,
+                         ui_card=ui_card)
 
 
 def discover_plugins(plugins_dir: Path, core_tool_names: set[str],

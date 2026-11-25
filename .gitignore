@@ -88,3 +88,5 @@ config/activity_log*.jsonl
 config/macros/
 smoke_results.json
 media_selftest.png
+config/market.json
+packaging/markets-card.png
