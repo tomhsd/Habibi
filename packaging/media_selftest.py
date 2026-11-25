@@ -37,11 +37,11 @@ for name in ("habibi test song A.wav", "habibi test song B.wav"):
         w.setnchannels(2); w.setsampwidth(2); w.setframerate(sr)
         w.writeframes((np.repeat(np.clip(x, -1, 1)[:, None], 2, 1) * 32767).astype("<i2").tobytes())
 
+import ui  # noqa: E402  (before the QApplication, so Qt WebEngine can load)
 from PyQt6.QtCore import QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 app = QApplication(sys.argv)
-import ui  # noqa: E402
 
 win = ui.MainWindow("")
 win.resize(1400, 860)

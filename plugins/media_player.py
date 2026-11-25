@@ -144,8 +144,9 @@ def media_player(parameters: dict, player=None) -> str:
 PLUGIN = {
     "name": "media_player",
     "description": (
-        "Habibi's BUILT-IN audio/video player (in the left sidebar, no browser, no YouTube). Use it "
-        "whenever the user wants to play music, songs, a video or a movie FROM THEIR PC. "
+        "Habibi's BUILT-IN audio/video player (left sidebar, plays inside Habibi, no browser). Use it "
+        "to play music, songs, videos or movies FROM THEIR PC, and to pause/next/seek/volume whatever "
+        "the player is playing (also YouTube started by the youtube_player plugin). "
         "play(query) searches Music/Videos/Downloads/Desktop/Documents and other drives by file or "
         "folder name ('my music' = the Music folder); play(path) plays an exact file or folder; "
         "add = append to the playlist. Then pause, resume, stop, next, previous, seek(seconds, "

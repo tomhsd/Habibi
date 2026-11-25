@@ -517,6 +517,7 @@ class HabibiLive:
         self.ui.get_plugins = self._plugin_registry.list_for_ui
         self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
+        self._plugin_registry.run_ui_setup(self.ui)   # plugins: optional setup_ui(player)
 
         # ── Wake word ────────────────────────────────────────────────────────
         # _awake gates the mic (see _listen_audio) and the background speakers.
