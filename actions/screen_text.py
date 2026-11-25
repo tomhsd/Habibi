@@ -36,7 +36,8 @@ def _grab(area: str) -> tuple[np.ndarray, int, int]:
                 import ctypes
                 from ctypes import wintypes
                 r = wintypes.RECT()
-                hwnd = ctypes.windll.user32.GetForegroundWindow()
+                from core import target
+                hwnd = target.last_user_window()      # your app, not Habibi's HUD
                 ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
                 if r.right - r.left > 50 and r.bottom - r.top > 50:
                     region = {"left": r.left, "top": r.top,

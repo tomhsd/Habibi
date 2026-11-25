@@ -433,6 +433,9 @@ class HabibiLive:
         # 🛑 Emergency stop: Ctrl+Alt+Q anywhere stops all automation and speech
         from core import safety as _safety
         _safety.start_hotkey(log=lambda t: self.ui.write_log(t))
+        # 🎯 Remember which app you were using, so "type here" never lands in Habibi's HUD
+        from core import target as _target
+        _target.start_tracker()
 
         def _on_emergency_stop():
             loop = getattr(self, "_loop", None)

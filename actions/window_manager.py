@@ -29,60 +29,22 @@ def _monitors() -> list[dict]:
 
 
 def _top_windows() -> list[tuple[int, str]]:
-    import win32gui
-    out = []
-
-    def _cb(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd):
-            t = win32gui.GetWindowText(hwnd)
-            if t and t not in ("Program Manager",) and not win32gui.GetParent(hwnd):
-                out.append((hwnd, t))
-    win32gui.EnumWindows(_cb, None)
-    return out
+    from core import target
+    return [(h, target.title_of(h)) for h in target.user_windows()]
 
 
 def _find(title: str) -> tuple[int, str]:
-    if not title:
-        hwnd = _user32().GetForegroundWindow()
-        import win32gui
-        return hwnd, win32gui.GetWindowText(hwnd)
-    t = title.lower()
-    wins = _top_windows()
-    for hwnd, name in wins:
-        if name.lower() == t:
-            return hwnd, name
-    for hwnd, name in wins:
-        if t in name.lower():
-            return hwnd, name
-    raise LookupError(f"No open window matches '{title}'.")
+    """Best match for `title` (title or app name); blank = the window you were
+    using before talking to Habibi, never Habibi itself."""
+    from core import target
+    hwnd = target.find(title)
+    return hwnd, target.title_of(hwnd)
 
 
-def focus_window(hwnd: int) -> None:
-    """Bring a window to the front reliably — without tapping Alt, which would
-    open the app's menu bar and turn the next typed letters into menu shortcuts."""
-    import win32con
-    import win32gui
-    u = _user32()
-    if win32gui.IsIconic(hwnd):
-        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-    fg = u.GetForegroundWindow()
-    if fg == hwnd:
-        return
-    k32 = ctypes.windll.kernel32
-    me = k32.GetCurrentThreadId()
-    fg_tid = u.GetWindowThreadProcessId(fg, None)
-    attached = bool(fg_tid and fg_tid != me and u.AttachThreadInput(fg_tid, me, True))
-    try:
-        u.BringWindowToTop(hwnd)
-        u.SetForegroundWindow(hwnd)
-    finally:
-        if attached:
-            u.AttachThreadInput(fg_tid, me, False)
-    if u.GetForegroundWindow() != hwnd:
-        # last resort: a harmless Shift tap unlocks SetForegroundWindow (Alt would open menus)
-        u.keybd_event(0x10, 0, 0, 0)
-        u.keybd_event(0x10, 0, 2, 0)
-        u.SetForegroundWindow(hwnd)
+def focus_window(hwnd: int) -> bool:
+    """Bring a window to the front and confirm it (never taps Alt)."""
+    from core import target
+    return target.bring_front(hwnd)
 
 
 _focus = focus_window
@@ -132,7 +94,8 @@ def window_manager(parameters: dict, player=None) -> str:
             return f"'{b}' is on your blocked list."
         before = A.snapshot()
         if action == "focus":
-            _focus(hwnd)
+            if not _focus(hwnd):
+                return f"Couldn't bring '{name}' to the front (Windows refused). Click it once and try again."
         elif action == "minimize":
             win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
         elif action == "maximize":

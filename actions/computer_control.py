@@ -1,5 +1,6 @@
 #computer_control.py
 from core import secure as _secure
+import ctypes
 import io
 import json
 import platform
@@ -155,15 +156,51 @@ def _user_profile() -> dict:
         pass
     return {}
 
+def _keys_target() -> str:
+    """Before sending keys: if Habibi's own window has the focus (you just
+    talked to it), switch back to the app you were using, and confirm it."""
+    if _get_os() != "windows":
+        return ""
+    from core import target
+    fg = target.root_of(ctypes.windll.user32.GetForegroundWindow())
+    if fg and not target.is_own(fg):
+        return ""
+    h = target.last_user_window()
+    if not h:
+        return "No app window to type into. Open or name the app first."
+    if not target.bring_front(h):
+        return (f"Nothing typed: I couldn't bring {target.describe(h)} to the front, "
+                f"so the keys could have gone into Habibi. Click that window once and ask again.")
+    return ""
+
+
+def _write(text: str, interval: float = 0.03) -> None:
+    """Type any text, including Bangla/Arabic/emoji (pyautogui.typewrite
+    silently drops characters that aren't on the keyboard layout)."""
+    if _get_os() == "windows":
+        from pywinauto.keyboard import send_keys
+        safe = "".join("{" + c + "}" if c in "+^%~(){}[]" else c for c in text)
+        safe = safe.replace("\n", "{ENTER}").replace("\t", "{TAB}")
+        send_keys(safe, with_spaces=True, with_newlines=True, pause=interval, vk_packet=True)
+    else:
+        pyautogui.typewrite(text, interval=interval)
+
+
 def _type(text: str, interval: float = 0.03) -> str:
     _require_pyautogui()
-    time.sleep(0.3)
-    pyautogui.typewrite(text, interval=interval)
+    err = _keys_target()
+    if err:
+        return err
+    time.sleep(0.15)
+    _write(text, interval)
     return f"Typed: {text[:60]}{'…' if len(text) > 60 else ''}"
 
 
 def _smart_type(text: str, clear_first: bool = True) -> str:
     _require_pyautogui()
+    err = _keys_target()
+    if err:
+        return err
     if clear_first:
         _clear_field()
         time.sleep(0.1)
@@ -175,7 +212,7 @@ def _smart_type(text: str, clear_first: bool = True) -> str:
         pyautogui.hotkey(paste_key, "v")
         return f"Smart-typed (clipboard): {text[:60]}{'…' if len(text) > 60 else ''}"
 
-    pyautogui.typewrite(text, interval=0.04)
+    _write(text, 0.04)
     return f"Smart-typed: {text[:60]}{'…' if len(text) > 60 else ''}"
 
 
@@ -190,12 +227,18 @@ def _click(x=None, y=None, button: str = "left", clicks: int = 1) -> str:
 
 def _hotkey(*keys) -> str:
     _require_pyautogui()
+    err = _keys_target()
+    if err:
+        return err
     pyautogui.hotkey(*keys)
     return f"Hotkey: {'+'.join(keys)}"
 
 
 def _press(key: str) -> str:
     _require_pyautogui()
+    err = _keys_target()
+    if err:
+        return err
     pyautogui.press(key)
     return f"Pressed: {key}"
 
@@ -231,9 +274,12 @@ def _clipboard_get() -> str:
 
 def _clipboard_paste(text: str) -> str:
     if _PYPERCLIP:
+        _require_pyautogui()
+        err = _keys_target()
+        if err:
+            return err
         pyperclip.copy(text)
         time.sleep(0.1)
-        _require_pyautogui()
         paste_key = "command" if _get_os() == "mac" else "ctrl"
         pyautogui.hotkey(paste_key, "v")
         return f"Pasted: {text[:60]}{'…' if len(text) > 60 else ''}"
@@ -250,6 +296,9 @@ def _screenshot(save_path: str | None = None) -> str:
 
 def _clear_field() -> str:
     _require_pyautogui()
+    err = _keys_target()
+    if err:
+        return err
     select_key = "command" if _get_os() == "mac" else "ctrl"
     pyautogui.hotkey(select_key, "a")
     time.sleep(0.1)
@@ -260,6 +309,16 @@ def _focus_window(title: str) -> str:
     os_name = _get_os()
 
     if os_name == "windows":
+        try:
+            from core import target
+            h = target.find(title)
+            if target.bring_front(h):
+                return f"Focused window: {target.describe(h)}"
+            return f"Couldn't bring {target.describe(h)} to the front. Click it once and try again."
+        except LookupError as e:
+            return str(e)
+        except Exception:
+            pass
         try:
             script = f'(New-Object -ComObject WScript.Shell).AppActivate("{title}")'
             subprocess.run(

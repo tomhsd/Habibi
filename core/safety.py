@@ -184,6 +184,16 @@ def blocked_app(process: str = "", title: str = "") -> str:
     """Name of the blocked-list entry matching this app/window, or ''."""
     if not process and not title:
         process, title = foreground_app()
+        try:                         # Habibi itself is in front → check the app it will act on
+            if sys.platform == "win32":
+                from core import target
+                fg = target.root_of(__import__("ctypes").windll.user32.GetForegroundWindow())
+                if target.is_own(fg):
+                    h = target.last_user_window()
+                    if h:
+                        process, title = target.process_of(h), target.title_of(h)
+        except Exception:
+            pass
     hay = f"{process} {title}".lower()
     for entry in load().get("blocked_apps", []):
         e = str(entry).strip().lower()

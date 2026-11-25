@@ -98,6 +98,33 @@ check("office handles missing Office", lambda: (bool(r := run("office", app="exc
 check("activity log written", lambda: (safety.LOG_FILE.exists() and safety.LOG_FILE.stat().st_size > 100,
                                          f"{safety.LOG_FILE.stat().st_size if safety.LOG_FILE.exists() else 0} bytes"))
 
+# ── window/field targeting: Habibi's own window in front must not receive the typing ──
+from core import target  # noqa: E402
+import ctypes  # noqa: E402
+target.start_tracker()
+_np = target.find("notepad")
+check("target finds Notepad by app name", lambda: ("notepad" in target.process_of(_np).lower(), target.describe(_np)))
+check("bring_front confirms focus", lambda: (target.bring_front(_np) and target.is_front(_np), target.describe(_np)))
+time.sleep(0.6)
+import tkinter as tk  # noqa: E402
+hud = tk.Tk(); hud.title("Habibi HUD stand-in"); hud.geometry("400x200+50+50")
+hud.update()
+_hud_hwnd = target.root_of(hud.winfo_id())
+target.bring_front(_hud_hwnd); hud.focus_force(); hud.update(); time.sleep(0.5)
+check("own window detected in front", lambda: (target.is_own(target.root_of(ctypes.windll.user32.GetForegroundWindow())), "ok"))
+check("blank window = the app you used, not Habibi",
+      lambda: (target.last_user_window() == _np, target.describe(target.last_user_window())))
+check("ui_control type with Habibi in front goes to Notepad",
+      lambda: ("Typed" in (r := run("ui_control", action="type", text=" TARGET-OK-77")) and "Notepad" in r, r))
+time.sleep(0.4)
+check("…and the text really is in Notepad", lambda: ("TARGET-OK-77" in (r := run("ui_control", action="read", window="Notepad")), r[-200:]))
+target.bring_front(_hud_hwnd); hud.update(); time.sleep(0.4)
+check("computer_control type (Bangla) with Habibi in front goes to Notepad",
+      lambda: ("Typed" in (r := run("computer_control", action="type", text=" আমি-ঠিক-আছি")), r))
+time.sleep(0.5)
+check("…Bangla text arrived intact", lambda: ("আমি-ঠিক-আছি" in (r := run("ui_control", action="read", window="Notepad")), r[-200:]))
+hud.destroy()
+
 np.kill()
 probe.unlink(missing_ok=True)
 failed = [n for n, ok, _ in results if not ok]
