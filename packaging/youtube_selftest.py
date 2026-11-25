@@ -65,9 +65,15 @@ def script():
         QTimer.singleShot(0, app.quit); return
     check("▶ YT button on the card", any(b.text() == "▶ YT" for b in win._media_card.findChildren(type(win._media_card.b_play))), "")
     check("link parsing", yt_mod.parse_link("https://youtu.be/M7lc1UVf-VE") == {"id": "M7lc1UVf-VE"}, "")
-    r = plug(action="play", link="https://www.youtube.com/watch?v=M7lc1UVf-VE")   # YouTube's IFrame API demo video
-    check("plugin play command", "Playing the YouTube video" in r, r)
-    ok = wait(lambda: yt.playing() and yt.s.get("dur", 0) > 0, 40)
+    # a video that allows embedding: some owners turn it off (error 150) — try a few
+    ok, tried = False, []
+    for q in ("big buck bunny 4k", "relaxing piano music", "nature 4k drone"):
+        r = plug(action="play", query=q)
+        tried.append((q, r))
+        ok = wait(lambda: yt.playing() and yt.s.get("dur", 0) > 0, 30)
+        if ok:
+            break
+    check("plugin play command (search)", "Playing the YouTube video" in tried[-1][1], tried)
     check("video plays in Habibi", ok, yt.s)
     check("title known", bool(yt.title()), yt.title())
     check("video page shown", win._hud_cam_stack.currentIndex() == 2, win._hud_cam_stack.currentIndex())
@@ -96,7 +102,9 @@ def script():
         check("list command", "YouTube playlist" in r, r[:200])
         check("profile saved for sign-in", (ROOT / "config" / "youtube_profile").exists(), "")
         # hide the video → RGB follows the YouTube audio
-        wait(lambda: yt.playing(), 15)
+        if not yt.playing():
+            wrap.media("resume")
+        wait(lambda: yt.playing(), 20)
         wrap.run_in_ui(lambda: win._media_card.b_vid.setChecked(False))
         print("state before RGB check:", yt.s.get("state"), "video on screen:", win._media.video_on_screen)
         seen = set()
