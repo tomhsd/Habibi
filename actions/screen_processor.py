@@ -86,6 +86,8 @@ def _compress(img_bytes: bytes, source_format: str = "PNG") -> tuple[bytes, str]
 
 
 def _capture_screen() -> tuple[bytes, str]:
+    from core import safety as _safety
+    _safety.guard_foreground()      # never look at a blocked app (⚙ → 🛡 SAFETY)
 
     if not _MSS:
         raise RuntimeError("mss is not installed. Run: pip install mss")

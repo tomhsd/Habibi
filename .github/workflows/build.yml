@@ -47,6 +47,10 @@ jobs:
           assert open(p).read().startswith('HABIBI-DPAPI-1') and s.read_protected_text(p) == '{}', 'file';
           print('DPAPI self-test OK')"
 
+      - name: Real Windows test of computer-control skills
+        continue-on-error: true
+        run: python packaging/smoke_test_windows.py
+
       - name: Build Habibi.exe
         run: python packaging/build_exe.py
 

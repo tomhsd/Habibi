@@ -74,12 +74,21 @@ class ActionRegistry:
         rec = self._actions.get(name)
         if rec is None or not rec.valid:
             return f"Action '{name}' is not available."
+        from core import safety
+        if safety.stopped() and name not in ("set_mood",):
+            return "🛑 Emergency stop is active — wait a few seconds, then ask again."
         try:
-            return _call_handler(rec.handler, parameters, ctx or {}) or "Done."
+            result = _call_handler(rec.handler, parameters, ctx or {}) or "Done."
+        except safety.Stopped:
+            result = "🛑 Stopped by the emergency stop (Ctrl+Alt+Q)."
+        except PermissionError as e:
+            result = f"Not allowed: {e}"
         except Exception as e:
             self._logger(f"Action '{name}' crashed during run(): {e}")
             traceback.print_exc()
-            return f"Tool '{name}' failed: {e}"
+            result = f"Tool '{name}' failed: {e}"
+        safety.log_activity(name, parameters, result)
+        return result
 
 
 def _call_handler(fn: Callable, parameters: dict, ctx: dict) -> str:

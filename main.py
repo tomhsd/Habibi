@@ -430,6 +430,15 @@ class HabibiLive:
         self._is_speaking         = False
         self._speaking_lock       = threading.Lock()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
+        # 🛑 Emergency stop: Ctrl+Alt+Q anywhere stops all automation and speech
+        from core import safety as _safety
+        _safety.start_hotkey(log=lambda t: self.ui.write_log(t))
+
+        def _on_emergency_stop():
+            loop = getattr(self, "_loop", None)
+            if loop is not None:
+                loop.call_soon_threadsafe(self._phone_interrupt)
+        _safety.on_stop(_on_emergency_stop)
         # ✋ Talk over Habibi to stop it (core/barge_in.py)
         from core.barge_in import BargeIn
         self._barge = BargeIn()
@@ -1022,7 +1031,12 @@ class HabibiLive:
                 import time as _t_mod
                 _now = _t_mod.monotonic()
                 _cooldown = 4.0  # seconds — covers echo window after speaking ends
-                if self._vision_busy or (_now - self._vision_last_time) < _cooldown:
+                from core import safety as _safety
+                _blk = _safety.blocked_app() if args.get("angle", "screen").lower() != "camera" else ""
+                if _blk:
+                    result = (f"'{_blk}' is on the user's blocked list (⚙ → 🛡 SAFETY), so you must not "
+                              f"look at the screen now. Tell the user briefly.")
+                elif self._vision_busy or (_now - self._vision_last_time) < _cooldown:
                     _wait = max(0, _cooldown - (_now - self._vision_last_time))
                     print(f"[Vision] ⏳ Cooldown active ({_wait:.1f}s remaining) — ignoring duplicate call")
                     result = "Vision is still processing the previous request. I will not call this again."

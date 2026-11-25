@@ -87,9 +87,9 @@ def main() -> None:
         "--specpath", str(WORK),
         "--paths", str(ROOT),
     ]
-    for pkg in ("core", "memory", "dashboard", "config", "uvicorn"):
+    for pkg in ("core", "memory", "dashboard", "config", "uvicorn", "pynput", "winrt", "pywinauto"):
         args += ["--collect-submodules", pkg]
-    for pkg in ("playwright", "openwakeword", "sherpa_onnx"):
+    for pkg in ("playwright", "openwakeword", "sherpa_onnx", "imageio_ffmpeg", "rapidocr_onnxruntime"):
         if importlib.util.find_spec(pkg) is not None:
             args += ["--collect-all", pkg]
     for src, dest in data:

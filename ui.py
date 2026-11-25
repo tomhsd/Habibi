@@ -2728,6 +2728,160 @@ class VoiceLockOverlay(QWidget):
         self.adjustSize()
 
 
+class SafetyOverlay(QWidget):
+    """Floating overlay — what Habibi may do on the PC without asking (core/safety.py)."""
+
+    _OW = 460
+    _LEVEL_TEXT = {
+        "careful": "Asks before every click, typing or change.",
+        "balanced": "Asks before deleting, closing, force-quitting, sending or paying.",
+        "free": "Asks only before things that can't be undone.",
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from core import safety
+        self._safety = safety
+        cfg = safety.load()
+        self._sel_level, self._sel_speed = cfg["level"], cfg["speed"]
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            SafetyOverlay {{
+                background: rgba(0, 6, 10, 245);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 6px;
+            }}
+        """)
+        self.setFixedWidth(self._OW)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 16, 22, 16)
+        lay.setSpacing(7)
+
+        def _lbl(txt, fs=8, bold=False, color=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft):
+            w = QLabel(txt)
+            w.setAlignment(align)
+            w.setWordWrap(True)
+            w.setFont(_mono(fs, bold))
+            w.setStyleSheet(f"color: {color}; background: transparent;")
+            return w
+
+        def _btn(text, primary=False, color=None):
+            b = QPushButton(text)
+            b.setFixedHeight(30)
+            b.setFont(_mono(7, True))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            col = color or (C.PRI if primary else C.TEXT_MED)
+            b.setStyleSheet(f"""
+                QPushButton {{ background: {C.PRI_GHO if primary else 'transparent'}; color: {col};
+                    border: 1px solid {col if primary or color else C.BORDER}; border-radius: 3px; }}
+                QPushButton:hover {{ color: {C.TEXT}; border-color: {C.PRI}; }}
+            """)
+            return b
+
+        _fs = (f"QLineEdit {{ background: #000d12; color: {C.TEXT}; "
+               f"border: 1px solid {C.BORDER}; border-radius: 3px; padding: 4px 8px; }}"
+               f"QLineEdit:focus {{ border: 1px solid {C.PRI}; }}")
+
+        lay.addWidget(_lbl("🛡  SAFETY", 12, True, C.PRI, Qt.AlignmentFlag.AlignCenter))
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
+        lay.addWidget(sep)
+
+        lay.addWidget(_lbl("WHAT MAY HABIBI DO WITHOUT ASKING?"))
+        self._lvl_btns: dict[str, QPushButton] = {}
+        row = QHBoxLayout(); row.setSpacing(4)
+        for key in safety.LEVELS:
+            b = _btn(key.upper())
+            b.clicked.connect(lambda _=False, k=key: self._pick_level(k))
+            self._lvl_btns[key] = b
+            row.addWidget(b)
+        lay.addLayout(row)
+        self._lvl_desc = _lbl("", 8, False, C.TEXT)
+        lay.addWidget(self._lvl_desc)
+
+        lay.addWidget(_lbl("AUTOMATION SPEED"))
+        self._spd_btns: dict[str, QPushButton] = {}
+        row2 = QHBoxLayout(); row2.setSpacing(4)
+        for key in ("slow", "normal", "fast"):
+            b = _btn(key.upper())
+            b.clicked.connect(lambda _=False, k=key: self._pick_speed(k))
+            self._spd_btns[key] = b
+            row2.addWidget(b)
+        lay.addLayout(row2)
+
+        lay.addWidget(_lbl("BLOCKED APPS — Habibi never looks at, clicks in or types into these "
+                           "(part of the app or window name, comma separated)"))
+        self._apps = QLineEdit(", ".join(cfg.get("blocked_apps", [])))
+        self._apps.setFont(_mono(9)); self._apps.setFixedHeight(30); self._apps.setStyleSheet(_fs)
+        lay.addWidget(self._apps)
+
+        lay.addWidget(_lbl("BLOCKED FOLDERS — Habibi never opens or changes files in these"))
+        self._folders = QLineEdit(", ".join(cfg.get("blocked_folders", [])))
+        self._folders.setPlaceholderText(r"e.g.  C:\Users\Mehedi\Documents\Private")
+        self._folders.setFont(_mono(9)); self._folders.setFixedHeight(30); self._folders.setStyleSheet(_fs)
+        lay.addWidget(self._folders)
+
+        lay.addSpacing(4)
+        lay.addWidget(_lbl("🛑  EMERGENCY STOP: press Ctrl + Alt + Q anywhere — every automation, "
+                           "macro, recording and HABIBI's voice stop at once.", 8, True, C.ACC2))
+        row3 = QHBoxLayout(); row3.setSpacing(6)
+        stop = _btn("🛑  STOP EVERYTHING NOW", color=C.RED)
+        stop.clicked.connect(lambda: self._safety.emergency_stop())
+        logb = _btn("📜  ACTIVITY LOG")
+        logb.clicked.connect(self._open_log)
+        row3.addWidget(stop); row3.addWidget(logb)
+        lay.addLayout(row3)
+
+        row4 = QHBoxLayout(); row4.setSpacing(8)
+        cancel = _btn("CANCEL")
+        cancel.clicked.connect(self.hide)
+        save = _btn("SAVE", primary=True)
+        save.clicked.connect(self._save)
+        row4.addWidget(cancel); row4.addWidget(save)
+        lay.addLayout(row4)
+        self._refresh()
+
+    def _pill(self, b, on):
+        b.setStyleSheet(f"""QPushButton {{ background: {C.PRI_GHO if on else 'transparent'};
+            color: {C.PRI if on else C.TEXT_MED}; border: 1px solid {C.PRI if on else C.BORDER};
+            border-radius: 3px; }} QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}""")
+
+    def _refresh(self):
+        for k, b in self._lvl_btns.items():
+            self._pill(b, k == self._sel_level)
+        for k, b in self._spd_btns.items():
+            self._pill(b, k == self._sel_speed)
+        self._lvl_desc.setText(self._LEVEL_TEXT[self._sel_level])
+
+    def _pick_level(self, k):
+        self._sel_level = k
+        self._refresh()
+
+    def _pick_speed(self, k):
+        self._sel_speed = k
+        self._refresh()
+
+    def _open_log(self):
+        f = self._safety.LOG_FILE
+        if not f.exists():
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("", encoding="utf-8")
+        try:
+            import os
+            os.startfile(str(f))
+        except Exception:
+            pass
+
+    def _save(self):
+        split = lambda s: [x.strip() for x in s.split(",") if x.strip()]
+        cfg = self._safety.load()
+        cfg.update(level=self._sel_level, speed=self._sel_speed,
+                   blocked_apps=split(self._apps.text()), blocked_folders=split(self._folders.text()))
+        self._safety.save(cfg)
+        self.saved = True
+        self.hide()
+
+
 class PluginManagerOverlay(QWidget):
     """Floating overlay — lists discovered plugins with per-plugin ON/OFF toggles."""
 
@@ -5115,6 +5269,14 @@ class MainWindow(QMainWindow):
         self._barge_btn.setText("✋  TALK OVER TO STOP: " + ("ON" if self.barge_in_enabled else "OFF"))
         lay.addWidget(self._barge_btn)
 
+        safe_btn = QPushButton("🛡  SAFETY")
+        safe_btn.setFixedHeight(26)
+        safe_btn.setFont(_mono(7))
+        safe_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        safe_btn.setStyleSheet(_BTN_STYLE_DIM)
+        safe_btn.clicked.connect(self._open_safety)
+        lay.addWidget(safe_btn)
+
         self._brief_btn = QPushButton()
         self._brief_btn.setFixedHeight(26)
         self._brief_btn.setFont(_mono(7))
@@ -5494,6 +5656,19 @@ class MainWindow(QMainWindow):
         ov.raise_()
         self._remote_overlay = ov
         self._log.append_log(f"SYS: Remote key generated — manual: {manual or url}")
+
+    def _open_safety(self):
+        old = getattr(self, "_safety_overlay", None)
+        if old:
+            old.hide()
+        cw = self.centralWidget()
+        ov = SafetyOverlay(parent=cw)
+        ov.adjustSize()
+        oh = min(ov.sizeHint().height() + 40, cw.height() - 16)
+        ov.setGeometry((cw.width() - ov._OW) // 2, max(8, (cw.height() - oh) // 2), ov._OW, oh)
+        ov.show()
+        ov.raise_()
+        self._safety_overlay = ov
 
     def _toggle_barge_in(self):
         self.barge_in_enabled = not self.barge_in_enabled

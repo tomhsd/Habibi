@@ -81,3 +81,9 @@ keystore.b64
 # Voice lock: your voiceprint and the downloaded model
 config/voiceprint.json
 config/models/
+
+# Computer-control personal data
+config/safety.json
+config/activity_log*.jsonl
+config/macros/
+smoke_results.json

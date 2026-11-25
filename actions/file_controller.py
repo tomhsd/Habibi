@@ -643,6 +643,14 @@ def file_controller(
     path   = params.get("path", "desktop")
     name   = params.get("name", "")
 
+    # 🛡 Blocked folders (⚙ → SAFETY): never touch files inside them
+    from core import safety as _safety
+    for _k, _v in params.items():
+        if isinstance(_v, str) and _v and any(c in _v for c in ("\\", "/", ":")):
+            _b = _safety.blocked_path(_v)
+            if _b:
+                return f"'{_b}' is a blocked folder — I won't touch files there."
+
     if player:
         player.write_log(f"[file] {action} {name or path}")
 
