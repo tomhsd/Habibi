@@ -572,7 +572,7 @@ class MediaCard(U.CornerCard):
     def __init__(self, engine: MediaEngine, parent=None):
         super().__init__("MEDIA PLAYER", parent)
         self.e = engine
-        lay = self.body()
+        lay = self.body(); self._body_lay = lay
 
         self.spectrum = Spectrum(engine)
         lay.addWidget(self.spectrum)
@@ -699,9 +699,16 @@ class MediaCard(U.CornerCard):
 
     def add_source_button(self, text: str, tip: str, callback, width: int = 0) -> QPushButton:
         """For plugins: put a button on the card (next to FILES / folder)."""
+        # Plugin buttons get their own row under FILES/☰/🌈/🎬: squeezed into
+        # that row they pushed the card wider than the sidebar and cut it off.
         b = _btn(text, tip, width)
         b.clicked.connect(callback)
-        self._opt_row.insertWidget(2, b)
+        if getattr(self, "_src_row", None) is None:
+            self._src_row = QHBoxLayout(); self._src_row.setSpacing(4)
+            lay = self._body_lay
+            i = lay.indexOf(self.listw)
+            lay.insertLayout(i if i >= 0 else lay.count(), self._src_row)
+        self._src_row.addWidget(b, 0 if width else 1)
         return b
 
     def _refresh_external(self):

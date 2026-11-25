@@ -434,8 +434,8 @@ def setup_ui(player) -> None:
     engine.attach_source(_yt)
 
     from PyQt6.QtWidgets import QInputDialog, QMenu
-    btn = card.add_source_button("▶ YT", "YouTube: play a link or search, sign in (Premium = no ads)",
-                                 lambda: None, 44)
+    btn = card.add_source_button("▶ YOUTUBE", "YouTube: play a link or search, sign in (Premium = no ads)",
+                                 lambda: None)
     menu = QMenu(btn)
 
     def _ask():

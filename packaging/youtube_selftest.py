@@ -63,7 +63,7 @@ def script():
     check("plugin attached to the media player (setup_ui)", yt is not None and win._media.src is yt, "")
     if yt is None:
         QTimer.singleShot(0, app.quit); return
-    check("▶ YT button on the card", any(b.text() == "▶ YT" for b in win._media_card.findChildren(type(win._media_card.b_play))), "")
+    check("▶ YOUTUBE button on the card", any(b.text() == "▶ YOUTUBE" for b in win._media_card.findChildren(type(win._media_card.b_play))), "")
     check("link parsing", yt_mod.parse_link("https://youtu.be/M7lc1UVf-VE") == {"id": "M7lc1UVf-VE"}, "")
     # a video that allows embedding: some owners turn it off (error 150) — try a few
     ok, tried = False, []
