@@ -55,6 +55,10 @@ jobs:
         continue-on-error: true
         run: python packaging/media_selftest.py
 
+      - name: Trading plugin test (live prices, sentiment, forecasts, sidebar card)
+        continue-on-error: true
+        run: python packaging/market_selftest.py
+
       - name: Screen-control demo (capture + interact)
         continue-on-error: true
         run: python examples/screen_control_demo.py

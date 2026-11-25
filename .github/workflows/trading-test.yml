@@ -1,0 +1,39 @@
+name: Trading plugin test
+
+# Live check of plugins/trading.py on every pull request that touches it:
+# real Yahoo prices, news, Fear & Greed, forecasts and the MARKETS card.
+on:
+  pull_request:
+    paths:
+      - "plugins/trading.py"
+      - "plugins/_market_engine.py"
+      - "plugins/_trading_ui.py"
+      - "core/plugin_loader.py"
+      - "packaging/market_selftest.py"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+          pip install requests PyQt6 psutil numpy
+      - name: Offline test (synthetic data)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python packaging/market_selftest.py --offline
+      - name: Live test (real market data)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python packaging/market_selftest.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: markets-card
+          path: packaging/markets-card.png
