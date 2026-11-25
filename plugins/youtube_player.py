@@ -24,7 +24,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
 
-_ORIGIN = "https://habibi.local"
+_ORIGIN = "https://www.youtube.com"
 _SIGN_IN_URL = ("https://accounts.google.com/ServiceLogin?service=youtube&hl=en"
                 "&continue=https%3A%2F%2Fwww.youtube.com%2F")
 
