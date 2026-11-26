@@ -5385,6 +5385,11 @@ class MainWindow(QMainWindow):
         sa.setFixedWidth(_RIGHT_W)
         return sa
 
+    @staticmethod
+    def _rail_need(sa) -> int:
+        inner = sa.widget() if sa is not None else None
+        return inner.minimumSizeHint().width() + 8 if inner is not None else 0
+
     def _apply_responsive_layout(self) -> None:
         """Share the window width between the rails and the reactor so
         nothing clips on small screens and nothing sits in a gap on big ones."""
@@ -5393,6 +5398,10 @@ class MainWindow(QMainWindow):
         W = self.width()
         left = int(min(max(W * 0.22, _LEFT_MIN_W), _LEFT_MAX_W))
         right = int(min(max(W * 0.25, _RIGHT_MIN_W), _RIGHT_MAX_W))
+        # Never narrower than the cards inside (fonts differ between PCs), so
+        # a rail grows a little rather than cutting its cards off.
+        left = max(left, self._rail_need(self._left_panel.findChild(QScrollArea)))
+        right = max(right, self._rail_need(self._right_panel))
         if (left, right) != self._rail_widths:
             self._rail_widths = (left, right)
             self._left_panel.setFixedWidth(left)

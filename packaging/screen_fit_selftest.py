@@ -40,6 +40,15 @@ SIZES = [
 ]
 
 app = QApplication(sys.argv)
+if sys.platform == "win32":
+    # Qt's offscreen platform on Windows has no system fonts and falls back to
+    # one ~1.7x wider than Consolas; load the fonts a real Windows desktop uses.
+    from PyQt6.QtGui import QFontDatabase
+    for fn in ("consola.ttf", "consolab.ttf", "segoeui.ttf", "segoeuib.ttf",
+               "seguiemj.ttf", "seguisym.ttf", "cour.ttf", "courbd.ttf"):
+        fp = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / fn
+        if fp.exists():
+            QFontDatabase.addApplicationFont(str(fp))
 win = ui.MainWindow("")
 from PyQt6.QtGui import QFontInfo, QFontMetrics  # noqa: E402
 _f = ui._mono(10, True)
