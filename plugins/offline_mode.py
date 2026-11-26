@@ -16,7 +16,8 @@ Part 1 (this file): the switch.
     Typed commands go through the same path. Wake word and voice lock still apply.
   • "go online", "auto", "status" work by voice or typing, without the model.
 
-Still to come: the shared data cache and one-click setup of the models.
+  • ⚙ SET UP OFFLINE VOICE: one-time download of everything above
+    (plugins/_offline_setup.py). Saved news and exchange rates: plugins/offline_cache.py.
 """
 from __future__ import annotations
 
@@ -62,12 +63,23 @@ BADGE_OFFLINE = "OFFLINE · LOCAL"
 BADGE_COLOR = "#ffb347"
 
 
-def _check_connection(_values=None):
-    """Settings button: (ok, message)."""
-    ok = _reachable()
-    _state.record(ok)
-    return ok, ("Gemini is reachable — Habibi can be online."
-                if ok else "Gemini can't be reached — Habibi would run offline.")
+def _setup_offline(values=None):
+    """Settings button: install / download everything offline mode needs."""
+    if not _reachable():
+        return False, "Setup needs the internet once — connect and try again."
+    host = _host
+
+    def log(t: str) -> None:
+        print(f"[OfflineSetup] {t}")
+        if host is not None:
+            try:
+                host.ui.write_log(t)
+            except Exception:
+                pass
+    try:
+        return _load_sibling("_offline_setup").run_setup(dict(values or {}), log)
+    except Exception as e:
+        return False, f"Setup failed: {e}"
 
 
 PLUGIN_SETTINGS = {
@@ -85,7 +97,7 @@ PLUGIN_SETTINGS = {
         {"key": "language", "label": "Spoken language", "type": "choice",
          "options": ["auto", "en", "bn", "ar", "hi"], "default": "auto"},
     ],
-    "action": {"label": "CHECK CONNECTION", "run": _check_connection},
+    "action": {"label": "SET UP OFFLINE VOICE (one-time download)", "run": _setup_offline},
 }
 
 
