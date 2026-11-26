@@ -58,6 +58,10 @@ jobs:
         continue-on-error: true
         run: python packaging/media_selftest.py
 
+      - name: Equalizer test (bands, bass, beat, presets, voice, sound path)
+        continue-on-error: true
+        run: python packaging/equalizer_selftest.py
+
       - name: YouTube in the media player test
         continue-on-error: true
         run: python packaging/youtube_selftest.py

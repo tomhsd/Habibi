@@ -1,0 +1,35 @@
+name: Equalizer test
+
+# Real Windows test of plugins/equalizer.py (+ the media player's audio hook).
+on:
+  pull_request:
+    paths: ["plugins/equalizer.py", "plugins/_eq_*.py", "packaging/equalizer_selftest.py", "ui_media.py",
+            ".github/workflows/equalizer-test.yml"]
+  workflow_dispatch:
+
+jobs:
+  equalizer:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Equalizer test
+        run: python packaging/equalizer_selftest.py
+      - name: Media player still works
+        run: python packaging/media_selftest.py
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: equalizer-screenshots
+          path: "*_selftest*.png"
+          if-no-files-found: ignore
