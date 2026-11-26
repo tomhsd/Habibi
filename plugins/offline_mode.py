@@ -70,7 +70,10 @@ def _setup_offline(values=None):
     host = _host
 
     def log(t: str) -> None:
-        print(f"[OfflineSetup] {t}")
+        try:
+            print(f"[OfflineSetup] {t}")
+        except Exception:               # a Windows console can't print every symbol
+            pass
         if host is not None:
             try:
                 host.ui.write_log(t)
