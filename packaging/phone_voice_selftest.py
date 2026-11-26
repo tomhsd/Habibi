@@ -175,9 +175,9 @@ function run(userAmp, spkOn) {
 }
 console.log(JSON.stringify({ echoOnly: run(0, true), user: run(0.6, true), pcOnly: run(0.3, false) }));
 """
-        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
             f.write(script)
-        out = subprocess.run([node, f.name], capture_output=True, text=True, timeout=30)
+        out = subprocess.run([node, f.name], capture_output=True, text=True, encoding="utf-8", timeout=30)
         os.unlink(f.name)
         try:
             res = json.loads(out.stdout.strip())
