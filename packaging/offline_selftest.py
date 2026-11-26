@@ -291,6 +291,21 @@ check(ai.is_habibi("pythonw.exe", ["pythonw", "main.py"], "/x/Habibi", _b), "ins
 check(not ai.is_habibi("python.exe", ["python", "/y/main.py"], "/", _b), "instances: ignores another project's main.py")
 check(not ai.is_habibi("Habibi.exe", ["Habibi.exe", "--run-script", "r.py"], "", _b), "instances: leaves helper scripts alone")
 check(ai._note["closed"] == 0, "instances: does nothing when switched off")
+_venv = Path(tmp) / ".venv312" / "Scripts" / "pythonw.exe"
+_venv.parent.mkdir(parents=True, exist_ok=True)
+_venv.write_text("")
+check(ai.should_switch_python(False, r"C:\Py315\pythonw.exe", _venv, False, False),
+      "python switch: Python without the offline voice restarts with .venv312")
+check(not ai.should_switch_python(False, str(_venv), _venv, False, False),
+      "python switch: already on .venv312 stays")
+check(not ai.should_switch_python(False, r"C:\Py315\pythonw.exe", _venv, True, False),
+      "python switch: a Python that has the offline voice stays")
+check(not ai.should_switch_python(False, r"C:\Py315\pythonw.exe", _venv, False, True),
+      "python switch: never loops")
+check(not ai.should_switch_python(True, r"C:\Habibi\Habibi.exe", _venv, False, False),
+      "python switch: the .exe never switches")
+check(not ai.should_switch_python(False, r"C:\Py315\pythonw.exe", Path(tmp) / "nope.exe", False, False),
+      "python switch: no .venv312, no switch")
 
 shutil.rmtree(tmp, ignore_errors=True)
 print()
