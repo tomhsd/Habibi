@@ -135,9 +135,9 @@ def run_setup(values: dict, log: Callable[[str], None] = print) -> tuple[bool, s
     results["brain"] = _ollama(model, log)
     failed = [k for k, ok in results.items() if not ok]
     if not failed:
-        msg = "Offline voice is ready ✓ — Habibi can listen, think and talk without internet."
+        msg = "Offline voice is ready — Habibi can listen, think and talk without internet."
         log(f"SYS: {msg}")
         return True, msg
     if failed == ["voice"]:
-        return True, "Ready ✓ (using the Windows voice — the Piper voice didn't download)."
+        return True, "Ready (using the Windows voice — the Piper voice didn't download)."
     return False, "Not finished: " + ", ".join(failed) + " — see the log, then try again."
