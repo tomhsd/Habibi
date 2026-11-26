@@ -55,3 +55,7 @@ Name: "{autodesktop}\Habibi {#Edition}"; Filename: "{app}\Habibi.exe"; Tasks: de
 
 [Run]
 Filename: "{app}\Habibi.exe"; Description: "Start Habibi {#Edition}"; Flags: nowait postinstall skipifsilent
+
+[UninstallDelete]
+; the user's own logo (⚙ → CHANGE LOGO) lives here
+Type: filesandordirs; Name: "{app}\config\logo"
