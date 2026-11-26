@@ -306,17 +306,19 @@ def _quick_command(text: str) -> str | None:
 
 
 def _make_text_handler(host):
-    def handle(text: str) -> None:
+    def handle(text: str) -> str:
+        """Answers (and speaks) one typed or phone command; returns the answer
+        so the phone can show it too."""
         text = (text or "").strip()
         if not text:
-            return
+            return ""
         a = _assistant
         if a is not None:
-            a.handle_text(text)          # speaks the answer too
-            return
-        quick = _quick_command(text)
-        _say(host, quick or "I'm offline and my local voice isn't running, so I can only "
-                            "switch modes right now ('go online', 'auto', 'status').")
+            return a.handle_text(text) or ""         # speaks the answer too
+        answer = _quick_command(text) or ("I'm offline and my local voice isn't running, so I can only "
+                                          "switch modes right now ('go online', 'auto', 'status').")
+        _say(host, answer)
+        return answer
     return handle
 
 

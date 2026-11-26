@@ -8,8 +8,12 @@ with what Habibi is playing at that moment:
     expected echo  = coupling × (loudness Habibi is playing right now)
     you talking    = mic clearly louder than the expected echo for ~0.3 s
 
-The coupling (how much of the speaker sound reaches the mic) is learned while
-you are quiet, so it adapts to your speakers, volume and room. When you talk
+The coupling (how much of the speaker sound reaches the mic) is learned from
+every chunk (fast while the mic is quiet, slowly while it is loud), so it adapts
+to your speakers, volume and room — even loud speakers next to the mic, where
+Habibi's echo is louder than what it plays. Until a few hundred milliseconds of
+echo have been measured, talking over needs to last twice as long, so Habibi's
+first words can't stop itself. When you talk
 over Habibi it stops at once and the start of what you said is passed on, so
 nothing you said is lost.
 """
@@ -22,14 +26,18 @@ import numpy as np
 
 TRIGGER_CHUNKS = 4          # ~0.26 s of 64 ms mic chunks
 MIN_LEVEL = 0.02            # quieter than this is never treated as speech
-OVER_ECHO = 2.2             # mic must be this many times louder than expected echo
+OVER_ECHO = 1.6             # mic must be this many times louder than the loudest echo
 HOLD_CHUNKS = 12            # ~0.8 s of your words kept and sent after stopping
+MAX_COUPLING = 8.0          # loud speakers right next to the mic
+LEARNED_AFTER = 16          # echo chunks (~1 s) measured before the normal trigger is used
+PLAY_DELAY = 0.6            # sound card + room delay covered after a chunk is queued
 
 
 class BargeIn:
     def __init__(self):
         self._out: deque = deque(maxlen=200)   # (start, end, rms) of played audio
-        self._k = 1.0                          # learned speaker→mic coupling (starts cautious)
+        self._k = 1.0                          # learned speaker→mic coupling
+        self._learned = 0                      # echo chunks measured so far
         self._hits = 0
         self._held: deque = deque(maxlen=HOLD_CHUNKS)
         self._cooldown_until = 0.0
@@ -45,7 +53,7 @@ class BargeIn:
         """Record a chunk Habibi is about to play (called by the speaker loop)."""
         pcm = np.frombuffer(data, dtype=np.int16)
         now = time.monotonic()
-        self._out.append((now, now + len(pcm) / sample_rate + 0.25, self._rms(pcm)))
+        self._out.append((now, now + len(pcm) / sample_rate + PLAY_DELAY, self._rms(pcm)))
 
     def _expected(self, now: float) -> float:
         vals = [r for (t0, t1, r) in self._out if t0 - 0.05 <= now <= t1]
@@ -58,13 +66,26 @@ class BargeIn:
         rms = self._rms(np.frombuffer(data, dtype=np.int16))
         exp = self._expected(now)
         threshold = max(MIN_LEVEL, self._k * exp * OVER_ECHO)
-        if rms > threshold:
+        loud = rms > threshold
+        if loud:
             self._hits += 1
         else:
             self._hits = max(0, self._hits - 1)
-            if exp > 0.01:             # quiet user → learn how much echo this setup has
-                self._k = 0.96 * self._k + 0.04 * min(rms / exp, 2.0)
-        if self._hits >= TRIGGER_CHUNKS and now >= self._cooldown_until:
+        if exp > 0.01:                 # learn how much echo this setup has
+            # Track the LOUDEST echo seen (rise fast, fall slowly): an average
+            # under-guesses it, and the loud moments are what used to make
+            # Habibi stop itself. While the mic is louder than any echo yet
+            # (maybe the user), it only creeps up.
+            ratio = min(rms / exp, MAX_COUPLING)
+            if loud and self._learned >= LEARNED_AFTER:
+                rate = 0.01
+            else:
+                rate = 0.25 if ratio > self._k else 0.01
+            self._k = (1 - rate) * self._k + rate * ratio
+            if rms > MIN_LEVEL:        # only chunks where the echo was actually heard
+                self._learned += 1
+        need = TRIGGER_CHUNKS if self._learned >= LEARNED_AFTER else TRIGGER_CHUNKS * 2
+        if self._hits >= need and now >= self._cooldown_until:
             self._hits = 0
             self._cooldown_until = now + 1.5
             return True

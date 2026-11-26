@@ -50,6 +50,9 @@ jobs:
       - name: Offline mode test (online/offline switch, voice takeover)
         run: python packaging/offline_selftest.py
 
+      - name: Phone voice test (hold-to-talk, captions, no self-interruption)
+        run: python packaging/phone_voice_selftest.py
+
       - name: Real Windows test of computer-control skills
         continue-on-error: true
         run: python packaging/smoke_test_windows.py
