@@ -24,12 +24,12 @@ try:   # must load before the QApplication exists (plugins that use web views, e
 except Exception:
     pass
 from PyQt6.QtCore import (
-    QEasingCurve, QMimeData, QObject, QParallelAnimationGroup, QPointF,
+    QEasingCurve, QEvent, QMimeData, QObject, QParallelAnimationGroup, QPointF,
     QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal,
 )
 from PyQt6.QtGui import (
     QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
-    QFontDatabase, QKeySequence, QLinearGradient, QPainter, QPainterPath,
+    QFontDatabase, QFontMetrics, QKeySequence, QLinearGradient, QPainter, QPainterPath,
     QPen, QPixmap, QPolygonF, QRadialGradient, QShortcut,
 )
 from PyQt6.QtWidgets import (
@@ -1533,6 +1533,20 @@ class LoadMeter(QWidget):
         p.end()
 
 
+class _LayoutWatcher(QObject):
+    """Calls back when a watched widget's layout asks to be redone (its
+    content's size changed)."""
+
+    def __init__(self, callback, parent=None):
+        super().__init__(parent)
+        self._cb = callback
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.LayoutRequest:
+            self._cb()
+        return False
+
+
 class StatusStrip(QWidget):
     """Footer state readout. All four states stay visible and the live one is
     bracketed — you can see at a glance what the assistant can be doing, not
@@ -1558,6 +1572,14 @@ class StatusStrip(QWidget):
             return
         self._state = s
         self.update()
+
+    def needed_width(self) -> int:
+        """Width that shows every state with the widest one bracketed."""
+        reg, bold = QFontMetrics(_mono(9)), QFontMetrics(_mono(9, True))
+        words = sum(reg.horizontalAdvance(s) + 6 for s in self._STATES)
+        extra = max(bold.horizontalAdvance(f"[ {s} ]") - reg.horizontalAdvance(s)
+                    for s in self._STATES)
+        return 12 + 62 + words + extra + 14 * (len(self._STATES) - 1) + 12
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -4275,6 +4297,7 @@ class MainWindow(QMainWindow):
         sc_intr = QShortcut(QKeySequence("Escape"), self)
         sc_intr.activated.connect(self._do_interrupt)
 
+        self._watch_rails()
         self._apply_responsive_layout()
 
     # ══════════════════════════════════════════════════════════════════════
@@ -5386,6 +5409,26 @@ class MainWindow(QMainWindow):
         sa.setFixedWidth(_RIGHT_W)
         return sa
 
+    def _watch_rails(self) -> None:
+        """Plugins add cards and buttons to the rails after start-up (Markets,
+        YouTube, EQ...). Re-fit the rails whenever their content grows, so a
+        new card never ends up under the rail's edge."""
+        self._rail_refit_pending = False
+
+        def refit():
+            self._rail_refit_pending = False
+            self._apply_responsive_layout()
+
+        def later():
+            if not self._rail_refit_pending:
+                self._rail_refit_pending = True
+                QTimer.singleShot(0, refit)
+
+        self._rail_watcher = _LayoutWatcher(later, self)
+        for sa in (self._left_panel.findChild(QScrollArea), self._right_panel):
+            if sa is not None and sa.widget() is not None:
+                sa.widget().installEventFilter(self._rail_watcher)
+
     @staticmethod
     def _rail_need(sa) -> int:
         inner = sa.widget() if sa is not None else None
@@ -5408,7 +5451,7 @@ class MainWindow(QMainWindow):
             self._left_panel.setFixedWidth(left)
             self._right_panel.setFixedWidth(right)
         compact = W < 1100
-        self._status_strip.setFixedWidth(min(left + 60, max(200, W // 4)))
+        self._status_strip.setFixedWidth(min(self._status_strip.needed_width(), max(200, W // 3)))
         self._input.setMinimumWidth(220 if compact else 380)
         # Header and footer extras step out of the way on narrow windows, so
         # they never force the window wider than the screen.

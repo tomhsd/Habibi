@@ -109,5 +109,21 @@ for W, H in SIZES:
         check(f"{tag}: no empty gaps", gap <= 60, f"{gap}px of margins")
     win.grab().save(str(ROOT / f"screen_fit_selftest_{tag}.png"))
 
+# A plugin adds a wide card after start-up (like Markets): the rail must grow.
+from PyQt6.QtWidgets import QLabel  # noqa: E402
+win.resize(1920, 1040)
+app.processEvents()
+wide = QLabel("X")
+wide.setMinimumWidth(left_sa.width() + 60)
+left_sa.widget().layout().insertWidget(1, wide)
+for _ in range(5):
+    app.processEvents()
+need = left_sa.widget().minimumSizeHint().width()
+check("rail grows when a plugin adds a wider card", need <= left_sa.width() - 5,
+      f"cards {need}px, rail {left_sa.width() - 5}px")
+check("footer status shows all states",
+      win._status_strip.width() >= win._status_strip.needed_width(),
+      f"{win._status_strip.width()} < {win._status_strip.needed_width()}")
+
 print("\nRESULT:", "ALL PASS" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")
 sys.exit(1 if FAILS else 0)
