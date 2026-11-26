@@ -45,6 +45,7 @@ def check(cond: bool, label: str) -> None:
 # ── 1. loader picks up the voice hooks, and only valid ones ─────────────────
 tmp = Path(tempfile.mkdtemp(prefix="habibi_offline_"))
 shutil.copy(ROOT / "plugins" / "offline_mode.py", tmp / "offline_mode.py")
+shutil.copy(ROOT / "plugins" / "_offline_engine.py", tmp / "_offline_engine.py")
 (tmp / "half_hook.py").write_text(
     "PLUGIN = {'name': 'half_hook', 'description': 'x', 'parameters': {'type': 'OBJECT'}}\n"
     "def run(parameters): return 'ok'\n"
@@ -89,6 +90,25 @@ class FakeHost:
         self.ui = FakeUI()
         self.plugin_text_handler = None
         self.reconnects = 0
+        self.tools_run: list = []
+        self.speaking: list = []
+        self._loop = None
+
+    def tool_declarations(self):
+        return [
+            {"name": "open_app", "description": "Open an app",
+             "parameters": {"type": "OBJECT", "properties": {
+                 "app_name": {"type": "STRING", "description": "app"}}}},
+            {"name": "web_search", "description": "online only",
+             "parameters": {"type": "OBJECT", "properties": {}}},
+        ]
+
+    async def run_tool(self, name, args=None):
+        self.tools_run.append((name, dict(args or {})))
+        return f"Opened {dict(args or {}).get('app_name', '?')}."
+
+    def set_speaking(self, on):
+        self.speaking.append(on)
 
     def request_reconnect(self, keep_context=True, reason=""):
         self.reconnects += 1
@@ -120,10 +140,14 @@ check(_store.get("offline_mode", {}).get("mode") == om.MODE_AUTO, "mode is saved
 # ── 3. voice_session runs, answers typed text, hands back when steady ───────
 NET["up"] = False
 om._state.record(False)
-om._local_reply = lambda text: None      # no Ollama in the test
+eng = om._load_sibling("_offline_engine")
+eng.Brain.available = lambda self: (setattr(self, "error", "no Ollama in the test") or False)
+eng.Mouth.say = lambda self, text: "none"      # no speakers in the test
+eng.Ears.load = lambda self: (setattr(self, "error", "no Whisper in the test") or False)
 
 
 async def session_test():
+    host._loop = asyncio.get_running_loop()
     task = asyncio.create_task(rec.voice_session(host))
     await asyncio.sleep(1.5)
     check(not task.done(), "offline session keeps running while unreachable")
@@ -161,7 +185,58 @@ async def session_test():
 
 asyncio.run(session_test())
 
-# ── 4. spoken "go offline" while on Gemini rebuilds the voice loop ──────────
+# ── 4. offline engine pieces ────────────────────────────────────────────────
+import numpy as np  # noqa: E402
+
+vad = eng.Utterances()
+rng = np.random.default_rng(1)
+quiet = lambda: (rng.normal(0, 40, eng.BLOCK)).astype(np.int16)          # noqa: E731
+t = np.arange(eng.BLOCK) / eng.SAMPLE_RATE
+loud = lambda: (3000 * np.sin(2 * np.pi * 220 * t)).astype(np.int16)    # noqa: E731
+got = [vad.feed(quiet()) for _ in range(30)]
+got += [vad.feed(loud()) for _ in range(15)]
+got += [vad.feed(quiet()) for _ in range(15)]
+utts = [g for g in got if g is not None]
+check(len(utts) == 1 and 0.9 < len(utts[0]) / eng.SAMPLE_RATE < 2.5,
+      "listening: one spoken phrase becomes one utterance")
+got = [vad.feed(loud()) for _ in range(2)] + [vad.feed(quiet()) for _ in range(20)]
+check(all(g is None for g in got), "listening: a short click is ignored")
+
+decls = FakeHost().tool_declarations()
+tools = eng.offline_tools(decls)
+names = [x["function"]["name"] for x in tools]
+check(names == ["open_app"], "only offline-safe tools are offered to the local model")
+check(tools[0]["function"]["parameters"]["type"] == "object"
+      and tools[0]["function"]["parameters"]["properties"]["app_name"]["type"] == "string",
+      "tool schemas are converted for Ollama")
+
+calls = []
+
+
+def fake_post(url, payload, timeout):
+    calls.append(payload)
+    if len(calls) == 1:
+        return {"message": {"content": "", "tool_calls": [
+            {"function": {"name": "open_app", "arguments": {"app_name": "notepad"}}}]}}
+    if len(calls) == 2:
+        return {"message": {"content": "Notepad is open."}}
+    return {"message": {"content": "", "tool_calls": [
+        {"function": {"name": "web_search", "arguments": "{\"query\": \"news\"}"}}]}}
+
+
+ran = []
+brain = eng.Brain("qwen2.5:3b", lambda n, a: (ran.append((n, a)) or "Opened notepad."),
+                  tools, post=fake_post)
+ans = brain.reply("open notepad")
+check(ran == [("open_app", {"app_name": "notepad"})], "local model's tool call runs the tool")
+check(ans == "Notepad is open.", "local model answers after the tool result")
+check(calls[1]["messages"][-1]["role"] == "tool", "tool result goes back to the model")
+check("internet" in calls[0]["messages"][0]["content"], "system prompt says what needs internet")
+ran.clear()
+brain.reply("search the news")
+check(ran == [], "a tool that isn't offered is never run")
+
+# ── 5. spoken "go offline" while on Gemini rebuilds the voice loop ──────────
 om.set_mode(om.MODE_AUTO)
 before = host.reconnects
 msg = rec.run({"action": "offline"})
@@ -172,7 +247,7 @@ check("Mode: Always offline" in rec.run({"action": "status"}), "tool: status rep
 rec.run({"action": "auto"})
 check(om.get_mode() == om.MODE_AUTO, "tool: 'auto' switches back to automatic")
 
-# ── 5. main.py is wired to the hook ─────────────────────────────────────────
+# ── 6. main.py is wired to the hook ─────────────────────────────────────────
 src = (ROOT / "main.py").read_text(encoding="utf-8")
 check(src.count("voice_takeover") >= 2, "main.py asks plugins before connecting and before backoff")
 check("_run_plugin_voice" in src and "plugin_text_handler" in src, "main.py runs the plugin voice loop")

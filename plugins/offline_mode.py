@@ -10,11 +10,13 @@ Part 1 (this file): the switch.
     (voice_takeover / voice_session, see core/plugin_loader.py) and hands it
     back to Gemini as soon as the connection is steady again.
   • Footer badge: "OFFLINE · LOCAL" while it runs.
-  • Typed commands while offline: answered by a local model if Ollama is
-    running, otherwise Habibi says so.
+  • Offline voice (plugins/_offline_engine.py): mic → Whisper → a local
+    model in Ollama (default qwen2.5:3b) with a short list of offline tools →
+    Piper voice, or the built-in Windows voice if no Piper voice is installed.
+    Typed commands go through the same path. Wake word and voice lock still apply.
+  • "go online", "auto", "status" work by voice or typing, without the model.
 
-Later parts plug into voice_session(): local listening (Whisper), thinking
-(Ollama) and speaking (Piper), a trimmed tool list, and the shared data cache.
+Still to come: the shared data cache and one-click setup of the models.
 """
 from __future__ import annotations
 
@@ -54,6 +56,8 @@ OFFLINE_RECHECK = 10            # seconds between checks while offline
 ONLINE_STREAK_TO_RETURN = 2     # steady successes needed before handing back
 FAILS_MEANS_OFFLINE = 3         # Gemini connects lost in a row → offline even if HTTPS works
 
+DEFAULT_MODEL = "qwen2.5:3b"     # ~2 GB in RAM, good tool use on CPU
+
 BADGE_OFFLINE = "OFFLINE · LOCAL"
 BADGE_COLOR = "#ffb347"
 
@@ -74,6 +78,12 @@ PLUGIN_SETTINGS = {
          "options": list(MODES), "default": MODE_AUTO},
         {"key": "check_every", "label": "Check the connection every (seconds)",
          "type": "choice", "options": ["15", "30", "60"], "default": "30"},
+        {"key": "model", "label": "Local model (Ollama)", "type": "text",
+         "default": "qwen2.5:3b", "placeholder": "qwen2.5:3b  or  llama3.2:3b"},
+        {"key": "stt_model", "label": "Speech recognition (bigger = better, slower)",
+         "type": "choice", "options": ["tiny", "base", "small"], "default": "base"},
+        {"key": "language", "label": "Spoken language", "type": "choice",
+         "options": ["auto", "en", "bn", "ar", "hi"], "default": "auto"},
     ],
     "action": {"label": "CHECK CONNECTION", "run": _check_connection},
 }
@@ -263,27 +273,21 @@ def _say(host, text: str) -> None:
         print(f"[Offline] {text}")
 
 
-def _local_reply(text: str) -> str | None:
-    """Text answer from a local model if Ollama / LM Studio is running, else None."""
-    try:
-        from core import llm_client
-        url, _ = llm_client.get_llm_settings()
-        import requests
-        probe = (f"{url}/v1/models" if llm_client.get_llm_provider() == "openai"
-                 else f"{url}/api/tags")
-        if requests.get(probe, timeout=2).status_code != 200:
-            return None
-        if llm_client.get_llm_provider() == "openai":
-            return None      # text path below is Ollama-only for now
-        return llm_client.call_llm_text(
-            text,
-            system=("You are Habibi, a friendly desktop assistant running offline "
-                    "on the user's PC. Answer briefly. You can't browse the web."),
-            timeout=90,
-        ) or None
-    except Exception as e:
-        print(f"[Offline] local model unavailable: {e}")
-        return None
+_assistant = None        # the running _offline_engine.OfflineAssistant, if any
+
+
+def _quick_command(text: str) -> str | None:
+    """Mode commands answered without the model (spoken or typed)."""
+    low = (text or "").lower().strip(" .!?")
+    if low in ("go online", "online", "online mode", "switch to online", "use gemini"):
+        set_mode(MODE_ONLINE)
+        return "Switching back to Gemini."
+    if low in ("auto", "auto mode", "automatic", "go auto"):
+        set_mode(MODE_AUTO)
+        return "Automatic mode: I'll switch back to Gemini when the connection is steady."
+    if low in ("status", "are you online", "are you offline", "offline status"):
+        return status_text()
+    return None
 
 
 def _make_text_handler(host):
@@ -291,29 +295,59 @@ def _make_text_handler(host):
         text = (text or "").strip()
         if not text:
             return
-        low = text.lower().strip(" .!?")
-        if low in ("go online", "online", "online mode", "switch to online", "use gemini"):
-            set_mode(MODE_ONLINE)
-            _say(host, "Switching back to Gemini.")
+        a = _assistant
+        if a is not None:
+            a.handle_text(text)          # speaks the answer too
             return
-        if low in ("auto", "auto mode", "automatic", "go auto"):
-            set_mode(MODE_AUTO)
-            _say(host, "Automatic mode: I'll switch back to Gemini when the connection is steady.")
-            return
-        if low in ("status", "are you online", "are you offline", "offline status"):
-            _say(host, status_text())
-            return
-        reply = _local_reply(text)
-        if reply:
-            _say(host, reply)
-        else:
-            _say(host, "I'm offline right now and no local model is set up yet, "
-                       "so I can't answer that. I'll be back as soon as the internet is.")
+        quick = _quick_command(text)
+        _say(host, quick or "I'm offline and my local voice isn't running, so I can only "
+                            "switch modes right now ('go online', 'auto', 'status').")
     return handle
+
+
+def _load_sibling(stem: str):
+    """Import plugins/<stem>.py by path (works from source and from the .exe,
+    where plugins/ is shipped as plain files)."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+    name = f"plugins.{stem}"
+    if name in sys.modules:
+        return sys.modules[name]
+    path = Path(__file__).resolve().parent / f"{stem}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except Exception:
+        sys.modules.pop(name, None)
+        raise
+    return mod
+
+
+def _make_assistant(host):
+    eng = _load_sibling("_offline_engine")      # lazy: numpy / sounddevice
+    cfg = _config()
+    a = eng.OfflineAssistant(host, {
+        "model": str(cfg.get("model") or DEFAULT_MODEL).strip(),
+        "stt_model": str(cfg.get("stt_model") or "base"),
+        "language": str(cfg.get("language") or "auto"),
+    }, log=lambda t: _log(host, t))
+    a.quick = _quick_command
+    return a
+
+
+def _log(host, text: str) -> None:
+    try:
+        host.ui.write_log(text)
+    except Exception:
+        print(f"[Offline] {text}")
 
 
 async def voice_session(host) -> None:
     """Runs the voice loop while offline. Returns to hand control back to Gemini."""
+    global _assistant
     from memory.config_manager import get_plugin_enabled
     _ensure_monitor()
     _state.active = True
@@ -323,30 +357,34 @@ async def voice_session(host) -> None:
         ui.set_link_status(BADGE_OFFLINE, BADGE_COLOR)
     except Exception:
         pass
-    try:
-        ui.set_state("IDLE")
-    except Exception:
-        pass
     why = ("you chose Always offline" if get_mode() == MODE_OFFLINE
            else "Gemini can't be reached")
-    _say(host, f"Offline mode — {why}. Typed commands still reach me; "
+    _log(host, f"SYS: Offline mode — {why}. Running on this PC; "
                "I'll switch back to Gemini on my own when the connection is steady.")
     host.plugin_text_handler = _make_text_handler(host)
+
+    def keep_going() -> bool:
+        return get_plugin_enabled(PLUGIN["name"]) and not _should_hand_back()
+
     try:
-        while True:
+        try:
+            _assistant = _make_assistant(host)
+        except Exception as e:
+            _assistant = None
+            _log(host, f"SYS: Offline voice couldn't start ({e}). Typed mode commands still work.")
+        if _assistant is not None:
+            await _assistant.run(keep_going)
+        while keep_going():
             await asyncio.sleep(1)
-            if not get_plugin_enabled(PLUGIN["name"]):
-                break
-            if _should_hand_back():
-                break
     finally:
+        _assistant = None
         _state.active = False
         host.plugin_text_handler = None
         try:
             ui.set_link_status("")
         except Exception:
             pass
-    _say(host, "Connection is back — switching to Gemini.")
+    _log(host, "SYS: Connection is back — switching to Gemini.")
 
 
 # ── tool (spoken / typed commands) ──────────────────────────────────────────
