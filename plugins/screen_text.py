@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
 import threading
 import time
 
@@ -113,6 +114,19 @@ def _ocr_rapid(img: np.ndarray) -> list[dict]:
     return words
 
 
+_OCR_PKGS = ("winrt-runtime winrt-Windows.Media.Ocr winrt-Windows.Graphics.Imaging "
+             "winrt-Windows.Storage.Streams winrt-Windows.Foundation "
+             "winrt-Windows.Foundation.Collections winrt-Windows.Globalization")
+
+
+class OcrMissing(RuntimeError):
+    def __init__(self, cause):
+        super().__init__(
+            "Reading the screen needs Windows OCR, which isn't installed "
+            f"({cause}). Run this once, then restart Habibi: "
+            f"\"{sys.executable}\" -m pip install {_OCR_PKGS}")
+
+
 def ocr(area: str = "screen") -> tuple[list[dict], int, int]:
     safety.guard_foreground()
     img, ox, oy = _grab(area)
@@ -123,7 +137,7 @@ def ocr(area: str = "screen") -> tuple[list[dict], int, int]:
             try:
                 words = _ocr_rapid(img)
             except Exception:
-                raise RuntimeError(f"No OCR engine available ({e_win})")
+                raise OcrMissing(e_win)
     return words, ox, oy
 
 
@@ -258,4 +272,7 @@ PLUGIN = {
 
 def run(parameters: dict, player=None, session_memory=None) -> str:
     """Plugin entry point (switch this tool off in ⚙ PLUGINS)."""
-    return screen_text(parameters or {}, player=player)
+    try:
+        return screen_text(parameters or {}, player=player)
+    except OcrMissing as e:
+        return str(e)

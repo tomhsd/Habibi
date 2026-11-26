@@ -72,4 +72,4 @@ winrt-Windows.Storage.Streams;     sys_platform == "win32"
 winrt-Windows.Foundation;          sys_platform == "win32"
 winrt-Windows.Foundation.Collections; sys_platform == "win32"
 winrt-Windows.Globalization;       sys_platform == "win32"
-rapidocr_onnxruntime
+rapidocr_onnxruntime;              python_version < "3.13"   # backup OCR (no wheels for newer Python)
