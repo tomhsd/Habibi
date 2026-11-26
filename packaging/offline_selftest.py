@@ -307,6 +307,18 @@ check(not ai.should_switch_python(True, r"C:\Habibi\Habibi.exe", _venv, False, F
 check(not ai.should_switch_python(False, r"C:\Py315\pythonw.exe", Path(tmp) / "nope.exe", False, False),
       "python switch: no .venv312, no switch")
 
+# ── 9. "Hey Habibi" wake word ───────────────────────────────────────────────
+_sp = _ilu.spec_from_file_location("wake_habibi_t", ROOT / "plugins" / "wake_habibi.py")
+wh = _ilu.module_from_spec(_sp); _sp.loader.exec_module(wh)
+for _t in ("Hey Habibi.", "habibi", "Hey, Habeebi!", "Ha bibi", "hey habibi open notepad", "حبيبي"):
+    check(wh.heard_habibi(_t), f"hey habibi: hears {_t!r}")
+for _t in ("", "hey baby", "hobby", "Habib said hello", "maybe", "Hey Jarvis"):
+    check(not wh.heard_habibi(_t), f"hey habibi: ignores {_t!r}")
+_regs = pl.PluginRegistry({}, print)
+check(_regs.sleep_listeners(object()) == [], "sleep_listener hook: no plugins, no feeds")
+_src = (ROOT / "main.py").read_text(encoding="utf-8")
+check("self.feed_sleep_listeners(indata)" in _src, "main.py feeds plugin wake words while asleep")
+
 shutil.rmtree(tmp, ignore_errors=True)
 print()
 print("ALL PASSED" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")
