@@ -132,6 +132,28 @@ time.sleep(0.5)
 check("…Bangla text arrived intact", lambda: ("আমি-ঠিক-আছি" in (r := run("ui_control", action="read", window="Notepad")), r[-200:]))
 hud.destroy()
 
+# naming the app: keys go to THAT app even when another app is in front
+_decoy = subprocess.Popen([sys.executable, "-c",
+    "import tkinter as t; r=t.Tk(); r.title('Decoy App 55'); r.geometry('500x300+300+200'); "
+    "e=t.Text(r); e.pack(fill='both', expand=1); e.focus_set(); r.focus_force(); r.mainloop()"])
+time.sleep(2.5)
+from core import target as _tg  # noqa: E402
+_dh = _tg.find("Decoy App 55")
+_tg.bring_front(_dh); time.sleep(0.4)
+check("app names understood ('the notepad app')", lambda: (_tg.find("the notepad app") == _np, _tg.describe(_tg.find("the notepad app"))))
+check("decoy app is in front", lambda: (_tg.is_front(_dh), _tg.describe(_tg.root_of(ctypes.windll.user32.GetForegroundWindow()))))
+check("computer_control type window=notepad goes to Notepad, not the app in front",
+      lambda: ("Typed" in (r := run("computer_control", action="type", window="notepad", text=" NAMED-APP-91")), r))
+time.sleep(0.5)
+check("…and the text really is in Notepad", lambda: ("NAMED-APP-91" in (r := run("ui_control", action="read", window="Notepad")), r[-200:]))
+check("unknown app: nothing typed, open windows listed",
+      lambda: ("Nothing done" in (r := run("computer_control", action="type", window="nosuchapp zz", text="x")), r))
+check("screen_click finds a button by name (accessibility tree)",
+      lambda: ("Clicked" in (r := run("computer_control", action="screen_click", window="notepad", description="File")), r))
+time.sleep(0.4)
+run("computer_control", action="press", window="notepad", key="esc")
+_decoy.kill()
+
 # plugin manager: install / reload / remove with no restart (temp folder, not the real one)
 import tempfile  # noqa: E402
 _pd = Path(tempfile.mkdtemp()); _src = Path(tempfile.mkdtemp())
