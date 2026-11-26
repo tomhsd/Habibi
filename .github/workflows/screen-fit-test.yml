@@ -1,0 +1,35 @@
+name: Screen fit test
+
+# Real Windows test: the Habibi window fits small and large screens.
+on:
+  pull_request:
+    paths: ["ui.py", "ui_media.py", "packaging/screen_fit_selftest.py",
+            ".github/workflows/screen-fit-test.yml"]
+  workflow_dispatch:
+
+jobs:
+  screen-fit:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Screen fit test
+        run: python packaging/screen_fit_selftest.py
+      - name: Media player still works
+        run: python packaging/media_selftest.py
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-fit-screenshots
+          path: "*_selftest*.png"
+          if-no-files-found: ignore
