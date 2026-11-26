@@ -4137,6 +4137,7 @@ class MainWindow(QMainWindow):
         self.get_plugins       = None   # callable: () -> list[dict], set by HabibiLive
         self.plugin_admin      = None   # callable: (op, arg) -> {ok, message}; op = install|remove|reload
         self.get_plugin_settings = None # callable: () -> list[dict] settings schemas
+        self.app_icon_path: str | None = None   # .ico set by a plugin (custom_logo); None = Habibi's own
         self.on_wake_toggle    = None   # callable: (enable: bool) -> str, set by HabibiLive
         self.on_wake_manual    = None   # callable: () -> None — manual sleep/wake
         self.wake_get_state    = None   # callable: () -> dict {enabled, awake, ready}
@@ -5255,6 +5256,10 @@ class MainWindow(QMainWindow):
         ico_path = Path(__file__).resolve().parent / "config" / "habibi.ico"
         if not ico_path.exists():
             self._build_habibi_icon(ico_path)
+        # A plugin (custom_logo) can give Habibi the user's own picture.
+        _custom = getattr(self, "app_icon_path", None)
+        if _custom and Path(_custom).exists():
+            ico_path = Path(_custom)
 
         try:
             _os = platform.system()

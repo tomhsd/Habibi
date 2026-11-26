@@ -66,6 +66,9 @@ jobs:
         continue-on-error: true
         run: python packaging/youtube_selftest.py
 
+      - name: Custom logo test (window, header, shortcuts, taskbar pins)
+        run: python packaging/logo_selftest.py
+
       - name: Upload test screenshots
         if: always()
         uses: actions/upload-artifact@v4
