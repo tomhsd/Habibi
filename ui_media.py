@@ -97,6 +97,17 @@ class MediaEngine(QObject):
         self._last_buf = 0.0
         self._meter = None
         self._peak_avg = 0.05
+        # optional audio processor from a plugin (e.g. plugins/equalizer.py), see set_processor
+        self.processor = None
+        self._sink = None
+        self._sink_key = None
+        self._sink_io = None
+        self._pending = bytearray()
+        self._proc_failed = ""
+        self._proc_on = False
+        self._drain = QTimer(self)
+        self._drain.setInterval(10)
+        self._drain.timeout.connect(self._drain_pending)
         self._setup_analysis()
 
         self.src = None                # an external source from a plugin (see attach_source)
@@ -134,6 +145,7 @@ class MediaEngine(QObject):
     def _on_buffer(self, buf) -> None:
         try:
             fmt = buf.format()
+            rate = fmt.sampleRate() or 44100
             n = buf.byteCount()
             if n <= 0:
                 return
@@ -152,11 +164,136 @@ class MediaEngine(QObject):
             else:
                 return
             ch = max(1, fmt.channelCount())
-            a = a[: len(a) - len(a) % ch].reshape(-1, ch).mean(axis=1)
-            self.analyse(a, fmt.sampleRate() or 44100)
+            frames = a[: len(a) - len(a) % ch].reshape(-1, ch)
+            if self._proc_on and self._processing():
+                frames = self._process_out(frames, rate)
+            self.analyse(frames.mean(axis=1), rate)
             self._last_buf = time.time()
         except Exception:
             pass
+
+    # ── audio processor hook (plugins) ───────────────────────────────────────
+    # A processor has active() -> bool, process(frames n×ch float32, rate) ->
+    # frames, and optionally reset(). While it is active, Habibi's own player is
+    # silenced and the processed copy of the decoded audio is played instead
+    # (QAudioBufferOutput → processor → QAudioSink). When it isn't active (or Qt
+    # is too old to hand out the decoded audio) nothing changes.
+    def set_processor(self, proc) -> None:
+        self.processor = proc
+        self.processor_changed()
+
+    def can_process(self) -> bool:
+        return getattr(self, "_abo", None) is not None and not self._proc_failed
+
+    def _processing(self) -> bool:
+        p = self.processor
+        try:
+            return (p is not None and self.mode == "local" and self.can_process()
+                    and bool(p.active()))
+        except Exception:
+            return False
+
+    def processor_changed(self) -> None:
+        """Call after the processor's settings change (turns the path on/off)."""
+        self._proc_failed = ""                    # a change = try the EQ output again
+        on = self._processing()
+        if on != self._proc_on:
+            self._proc_on = on
+            if not on:
+                self._close_sink()
+            self._reset_processor()
+        self._apply_volume()
+
+    def processing_status(self) -> str:
+        if getattr(self, "_abo", None) is None:
+            return "unavailable: this Qt version doesn't give out decoded audio (needs Qt 6.8+)"
+        if self._proc_failed:
+            return "failed: " + self._proc_failed
+        return "on" if self._processing() else "off"
+
+    def _reset_processor(self) -> None:
+        self._pending.clear()
+        if self._sink is not None:
+            self._close_sink()
+        try:
+            if self.processor is not None and hasattr(self.processor, "reset"):
+                self.processor.reset()
+        except Exception:
+            pass
+
+    def _close_sink(self) -> None:
+        self._drain.stop()
+        self._pending.clear()
+        if self._sink is not None:
+            try:
+                self._sink.stop()
+                self._sink.deleteLater()
+            except Exception:
+                pass
+        self._sink = self._sink_io = self._sink_key = None
+
+    def _open_sink(self, rate: int, ch: int) -> None:
+        from PyQt6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices
+        self._close_sink()
+        dev = self.audio.device() if not self.audio.device().isNull() else QMediaDevices.defaultAudioOutput()
+        fmt = QAudioFormat()
+        fmt.setSampleRate(int(rate))
+        fmt.setChannelCount(int(ch))
+        fmt.setSampleFormat(QAudioFormat.SampleFormat.Float)
+        if not dev.isFormatSupported(fmt):
+            fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        sink = QAudioSink(dev, fmt, self)
+        sink.setBufferSize(int(rate * ch * 4 * 0.12))           # ~120 ms
+        io = sink.start()
+        if io is None:
+            raise RuntimeError(f"audio output didn't start ({sink.error()})")
+        self._sink, self._sink_io = sink, io
+        self._sink_key = (int(rate), int(ch))
+        self._sink_float = fmt.sampleFormat() == QAudioFormat.SampleFormat.Float
+        self._sink_bps = (4 if self._sink_float else 2) * ch
+        self._drain.start()
+
+    def _process_out(self, frames: np.ndarray, rate: int) -> np.ndarray:
+        try:
+            out = np.asarray(self.processor.process(frames, rate), dtype=np.float32)
+            if out.ndim == 1:
+                out = out[:, None]
+            ch = out.shape[1]
+            if self._sink is None or self._sink_key != (int(rate), ch):
+                self._open_sink(rate, ch)
+            g = self._vol / 100.0 * (0.25 if self._duck else 1.0)
+            pcm = out * g
+            data = (pcm.astype("<f4").tobytes() if self._sink_float else
+                    (np.clip(pcm, -1, 1) * 32767).astype("<i2").tobytes())
+            self._pending += data
+            limit = int(rate * self._sink_bps * 0.35)            # never fall more than 350 ms behind
+            if len(self._pending) > limit:
+                cut = len(self._pending) - limit
+                cut -= cut % self._sink_bps
+                del self._pending[:cut]
+            self._drain_pending()
+            return out
+        except Exception as e:                                   # fall back to the plain player
+            self._proc_failed = str(e) or e.__class__.__name__
+            print(f"[Media] audio processor off: {self._proc_failed}")
+            self._proc_on = False
+            self._close_sink()
+            self._apply_volume()
+            self.error.emit(f"Equalizer sound path failed: {self._proc_failed}")
+            return frames
+
+    def _drain_pending(self) -> None:
+        if self._sink is None or self._sink_io is None:
+            return
+        if not self._pending:
+            return
+        free = self._sink.bytesFree()
+        n = min(free, len(self._pending))
+        n -= n % self._sink_bps
+        if n > 0:
+            w = self._sink_io.write(bytes(self._pending[:n]))
+            if w and w > 0:
+                del self._pending[:w]
 
     def analyse(self, mono: np.ndarray, rate: int) -> None:
         """Spectrum → 16 log-spaced bands + bass/mid/treble/overall (0..1)."""
@@ -230,6 +367,7 @@ class MediaEngine(QObject):
             raise RuntimeError("No external media source is installed.")
         self.player.stop()
         self.mode = "external"
+        self.processor_changed()
         self.src.load(target)
         self.changed.emit()
 
@@ -246,6 +384,7 @@ class MediaEngine(QObject):
         if self.is_external():
             self.src.stop()
             self.mode = "local"
+            self.processor_changed()
         if append and self.playlist:
             self.playlist.extend(files)
         else:
@@ -280,6 +419,9 @@ class MediaEngine(QObject):
         if not (0 <= i < len(self.playlist)):
             return
         self.index = i
+        if self._proc_failed:
+            self.processor_changed()
+        self._reset_processor()
         self.player.setSource(QUrl.fromLocalFile(str(self.playlist[i])))
         self.player.play()
         self.changed.emit()
@@ -331,12 +473,14 @@ class MediaEngine(QObject):
         if self.is_external():
             self.src.stop()
         self.player.stop()
+        self._reset_processor()
         self.changed.emit()
 
     def seek(self, ms: int) -> None:
         if self.is_external():
             self.src.seek(ms)
             return
+        self._reset_processor()
         self.player.setPosition(max(0, int(ms)))
 
     def set_volume(self, pct: int) -> None:
@@ -352,7 +496,8 @@ class MediaEngine(QObject):
             self._apply_volume()
 
     def _apply_volume(self) -> None:
-        self.audio.setVolume(self._vol / 100.0 * (0.25 if self._duck else 1.0))
+        # while a processor plays the sound itself, the plain output stays silent
+        self.audio.setVolume(0.0 if self._proc_on else self._vol / 100.0 * (0.25 if self._duck else 1.0))
         if self.src is not None:
             self.src.set_volume(self._vol)
             self.src.duck(self._duck)
