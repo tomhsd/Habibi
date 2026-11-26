@@ -189,6 +189,44 @@ def _score(query: str, title: str, proc: str) -> int:
     return 0
 
 
+# What people call an app → its program name (when the title doesn't say it).
+_ALIASES = {
+    "word": "winword", "ms word": "winword", "microsoft word": "winword",
+    "powerpoint": "powerpnt", "power point": "powerpnt", "ppt": "powerpnt",
+    "excel": "excel", "ms excel": "excel", "outlook": "outlook",
+    "vs code": "code", "vscode": "code", "visual studio code": "code",
+    "chrome": "chrome", "google chrome": "chrome", "edge": "msedge",
+    "microsoft edge": "msedge", "firefox": "firefox", "brave": "brave", "opera": "opera",
+    "file explorer": "explorer", "explorer": "explorer", "files": "explorer",
+    "my computer": "explorer", "this pc": "explorer",
+    "cmd": "cmd", "command prompt": "cmd", "terminal": "windowsterminal",
+    "windows terminal": "windowsterminal", "powershell": "powershell",
+    "settings": "systemsettings", "task manager": "taskmgr", "paint": "mspaint",
+    "notepad": "notepad", "notepad++": "notepad++", "whatsapp": "whatsapp",
+    "telegram": "telegram", "discord": "discord", "spotify": "spotify",
+    "vlc": "vlc", "zoom": "zoom", "teams": "ms-teams", "anydesk": "anydesk",
+    "calculator": "calculatorapp", "photoshop": "photoshop",
+}
+_FILLER = {"the", "app", "application", "window", "program", "software", "my", "open", "in", "on"}
+
+
+def _variants(query: str) -> list[str]:
+    """The ways to look for what the user said: as said, without filler words
+    ('the notepad app' → 'notepad'), its program name, and single words."""
+    q = query.lower().strip().strip("'\"")
+    words = [w for w in q.replace("_", " ").split() if w not in _FILLER]
+    core_q = " ".join(words) or q
+    out = [q, core_q]
+    if core_q in _ALIASES:
+        out.append(_ALIASES[core_q])
+    out += [w for w in words if len(w) > 2]
+    seen, res = set(), []
+    for v in out:
+        if v and v not in seen:
+            seen.add(v); res.append(v)
+    return res
+
+
 def find(query: str) -> int:
     """Best window for `query` (part of its title or the app name). Blank
     means the window you were using. Raises LookupError when nothing fits."""
@@ -198,9 +236,12 @@ def find(query: str) -> int:
             raise LookupError("I can't tell which window you mean. Name the app or window.")
         return h
     best, best_key = 0, None
+    variants = _variants(query)
     for z, h in enumerate(user_windows()):
-        s = _score(query, title_of(h), process_of(h))
-        if not s:
+        t, p = title_of(h), process_of(h)
+        # earlier variants are what the user said more exactly: they count more
+        s = max((_score(v, t, p) - 5 * i for i, v in enumerate(variants) if _score(v, t, p)), default=0)
+        if s <= 0:
             continue
         key = (s, -recent_rank(h), -z)
         if best_key is None or key > best_key:

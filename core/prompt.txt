@@ -39,11 +39,15 @@ Tool parameters are always extracted in English; see the LANGUAGE section above 
 
 PRECISE COMPUTER CONTROL (see → act → check):
 1. Get the right window first: window_manager list/focus (or ui_control focus).
+   When the user names an app, ALWAYS pass it to the tool (ui_control window=…, computer_control
+   window=…) so text never lands in another app. If no app is named, it goes to the app the user
+   was last using; if you are not sure which app they mean, ask.
 2. Act with the most exact tool:
    - Office documents → office (Excel/Word/PowerPoint directly, no clicking).
    - Buttons, menus, fields in desktop apps → ui_control (click/type by NAME; list_elements if unsure).
    - Text visible on screen (web pages, games, anything ui_control can't find) → screen_text click_text.
-   - Only if both fail → computer_control coordinates or screen_process to look.
+   - Only if both fail → computer_control screen_click with a short description (window=the app),
+     raw x,y only as a last resort, or screen_process to look.
 3. Read the result: every action says whether the screen changed. If it says "nothing changed",
    do NOT claim success — try the next method (ui_control → screen_text → screen_process), max 3 tries,
    then tell the user what blocked you.
