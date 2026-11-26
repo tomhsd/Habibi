@@ -71,9 +71,14 @@ def _read_full_config() -> dict:
 # rail. It needs more horizontal room than the old one, so the default window
 # is wider and the minimum guards the three columns against collapsing.
 _DEFAULT_W, _DEFAULT_H = 1380, 800
-_MIN_W,     _MIN_H     = 1180, 700
 _LEFT_W  = 300
 _RIGHT_W = 342
+# Screen fitting: the side rails shrink to these on small screens and grow up
+# to the *_MAX sizes on big ones; the window opens at a size that fits the
+# monitor's free area (taskbar excluded) at any Windows scaling.
+_LEFT_MIN_W,  _LEFT_MAX_W  = 240, 340
+_RIGHT_MIN_W, _RIGHT_MAX_W = 256, 380
+_FLOOR_W, _FLOOR_H = 780, 520     # smallest window the layout still works in
 _HEADER_H = 58
 _FOOTER_H = 58
 
@@ -1538,7 +1543,7 @@ class StatusStrip(QWidget):
         super().__init__(parent)
         self._state = "IDLE"
         self.setFixedHeight(30)
-        self.setMinimumWidth(360)
+        self.setMinimumWidth(200)
 
     def set_state(self, state: str):
         s = (state or "").upper()
@@ -4094,14 +4099,9 @@ class MainWindow(QMainWindow):
             apply_ui_accent(_ui_color)
 
         self.setWindowTitle(f"{_display} — {APP_VERSION}")
-        self.setMinimumSize(_MIN_W, _MIN_H)
-        self.resize(_DEFAULT_W, _DEFAULT_H)
-
-        screen = QApplication.primaryScreen().availableGeometry()
-        self.move(
-            max(0, (screen.width()  - _DEFAULT_W) // 2),
-            max(0, (screen.height() - _DEFAULT_H) // 2),
-        )
+        self._start_maximized = False
+        self._rail_widths = (0, 0)
+        self._fit_to_screen(QApplication.primaryScreen())
 
         self.on_text_command   = None
         self.on_remote_clicked = None   # callable: () -> (url, key) | None
@@ -4146,6 +4146,7 @@ class MainWindow(QMainWindow):
         # Centre column: reactor + mic strip + resizable content panel
         self.hud = HudCanvas(face_path, _display)
         self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.hud.setMinimumSize(200, 200)
         self._content_panel = self._build_content_panel()
 
         # Live camera container — replaces the reactor when the stream is on
@@ -4213,7 +4214,9 @@ class MainWindow(QMainWindow):
         self._center_split.setCollapsible(0, False)
         body.addWidget(self._center_split, stretch=5)
 
-        self._right_panel = self._build_right_panel()
+        # The right rail scrolls when the screen is too short for all its cards
+        # (instead of pushing the footer off the bottom of the screen).
+        self._right_panel = self._scroll_rail(self._build_right_panel())
         body.addWidget(self._right_panel, stretch=0)
 
         root.addLayout(body, stretch=1)
@@ -4270,6 +4273,8 @@ class MainWindow(QMainWindow):
         sc_full.activated.connect(self._toggle_fullscreen)
         sc_intr = QShortcut(QKeySequence("Escape"), self)
         sc_intr.activated.connect(self._do_interrupt)
+
+        self._apply_responsive_layout()
 
     # ══════════════════════════════════════════════════════════════════════
     #  Header
@@ -4514,7 +4519,6 @@ class MainWindow(QMainWindow):
 
     def _build_right_panel(self) -> QWidget:
         w = QWidget()
-        w.setFixedWidth(_RIGHT_W)
         w.setStyleSheet("background: transparent;")
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -4708,7 +4712,7 @@ class MainWindow(QMainWindow):
         lay.setSpacing(12)
 
         self._status_strip = StatusStrip()
-        self._status_strip.setFixedWidth(_LEFT_W + 60)
+        self._status_strip.setFixedWidth(_LEFT_W + 60)   # resized in _apply_responsive_layout
         lay.addWidget(self._status_strip)
 
         lay.addStretch()
@@ -4717,6 +4721,7 @@ class MainWindow(QMainWindow):
 
         right = QVBoxLayout(); right.setSpacing(0)
         link = QLabel("SECURE SYSTEM LINK")
+        self._link_title_lbl = link
         link.setFont(_mono(8, True))
         link.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
         link.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -5326,8 +5331,87 @@ class MainWindow(QMainWindow):
         else:
             self.showFullScreen()
 
+    # ── screen fitting ───────────────────────────────────────────────────
+    def _fit_to_screen(self, screen) -> None:
+        """Size and centre the window for the monitor it opens on. The free
+        area is already in logical pixels, so Windows scaling (125%, 150%…)
+        is accounted for. If the normal size doesn't fit, open maximized."""
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        aw, ah = avail.width(), avail.height()
+        self.setMinimumSize(min(_FLOOR_W, aw), min(_FLOOR_H, ah))
+        too_small = aw < _DEFAULT_W + 20 or ah < _DEFAULT_H + 20
+        # Big monitors get a bigger window (not a small box in the middle).
+        w = min(max(_DEFAULT_W, int(aw * 0.8)), aw)
+        h = min(max(_DEFAULT_H, int(ah * 0.85)), ah)
+        self.resize(w, h)
+        self.move(avail.x() + max(0, (aw - w) // 2),
+                  avail.y() + max(0, (ah - h) // 2))
+        self._start_maximized = too_small
+
+    def _on_screen_changed(self, screen) -> None:
+        """Dragged to another monitor (or its scaling changed): keep the
+        window inside that monitor's free area."""
+        if screen is None or self.isMaximized() or self.isFullScreen():
+            return
+        avail = screen.availableGeometry()
+        self.setMinimumSize(min(_FLOOR_W, avail.width()), min(_FLOOR_H, avail.height()))
+        w, h = min(self.width(), avail.width()), min(self.height(), avail.height())
+        if (w, h) != (self.width(), self.height()):
+            self.resize(w, h)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_screen_hooked", False) and self.windowHandle():
+            self._screen_hooked = True
+            self.windowHandle().screenChanged.connect(self._on_screen_changed)
+
+    def _scroll_rail(self, inner: QWidget) -> QScrollArea:
+        sa = QScrollArea()
+        sa.setWidgetResizable(True)
+        sa.setFrameShape(QFrame.Shape.NoFrame)
+        sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sa.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollBar:vertical {{ background: transparent; width: 5px; border: none; }}
+            QScrollBar::handle:vertical {{ background: {C.BORDER_B};
+                border-radius: 2px; min-height: 24px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0; border: none; }}
+        """)
+        sa.viewport().setStyleSheet("background: transparent;")
+        sa.setWidget(inner)
+        sa.setFixedWidth(_RIGHT_W)
+        return sa
+
+    def _apply_responsive_layout(self) -> None:
+        """Share the window width between the rails and the reactor so
+        nothing clips on small screens and nothing sits in a gap on big ones."""
+        if not hasattr(self, "_right_panel") or not hasattr(self, "_status_strip"):
+            return
+        W = self.width()
+        left = int(min(max(W * 0.22, _LEFT_MIN_W), _LEFT_MAX_W))
+        right = int(min(max(W * 0.25, _RIGHT_MIN_W), _RIGHT_MAX_W))
+        if (left, right) != self._rail_widths:
+            self._rail_widths = (left, right)
+            self._left_panel.setFixedWidth(left)
+            self._right_panel.setFixedWidth(right)
+        compact = W < 1100
+        self._status_strip.setFixedWidth(min(left + 60, max(200, W // 4)))
+        self._input.setMinimumWidth(220 if compact else 380)
+        # Header and footer extras step out of the way on narrow windows, so
+        # they never force the window wider than the screen.
+        for name, keep in (("_link_title_lbl", W >= 1000), ("_link_lbl", W >= 1000),
+                           ("_sub_lbl", W >= 1250), ("_ping_lbl", W >= 1150),
+                           ("_load_meter", W >= 1000)):
+            wdg = getattr(self, name, None)
+            if wdg is not None and wdg.isVisibleTo(self) != keep:
+                wdg.setVisible(keep)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._apply_responsive_layout()
         cw = self.centralWidget()
         if self._overlay and self._overlay.isVisible():
             ow, oh = 460, 390
@@ -6222,7 +6306,10 @@ class HabibiUI:
         self._app.setStyle("Fusion")
         self._win = MainWindow(face_path)
         self.root = _RootShim(self._app)
-        self._win.show()
+        if self._win._start_maximized:      # screen smaller than the normal window
+            self._win.showMaximized()
+        else:
+            self._win.show()
 
     @property
     def muted(self) -> bool:
