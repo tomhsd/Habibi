@@ -7,11 +7,14 @@ network, no Gemini: the connection check and the settings store are faked.
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import sys
 import tempfile
 import time
 from pathlib import Path
+
+os.environ["HABIBI_NO_INSTANCE_CHECK"] = "1"   # never close real processes in tests
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -276,6 +279,18 @@ src = (ROOT / "main.py").read_text(encoding="utf-8")
 check(src.count("voice_takeover") >= 2, "main.py asks plugins before connecting and before backoff")
 check("_run_plugin_voice" in src and "plugin_text_handler" in src, "main.py runs the plugin voice loop")
 check("def set_link_status" in (ROOT / "ui.py").read_text(encoding="utf-8"), "ui.py has the footer badge hook")
+
+# ── 8. one Habibi at a time ─────────────────────────────────────────────────
+
+import importlib.util as _ilu
+_sp = _ilu.spec_from_file_location("app_instance_t", ROOT / "plugins" / "app_instance.py")
+ai = _ilu.module_from_spec(_sp); _sp.loader.exec_module(ai)
+_b = Path("/x/Habibi")
+check(ai.is_habibi("Habibi.exe", [], "", _b), "instances: spots Habibi.exe")
+check(ai.is_habibi("pythonw.exe", ["pythonw", "main.py"], "/x/Habibi", _b), "instances: spots python main.py in the Habibi folder")
+check(not ai.is_habibi("python.exe", ["python", "/y/main.py"], "/", _b), "instances: ignores another project's main.py")
+check(not ai.is_habibi("Habibi.exe", ["Habibi.exe", "--run-script", "r.py"], "", _b), "instances: leaves helper scripts alone")
+check(ai._note["closed"] == 0, "instances: does nothing when switched off")
 
 shutil.rmtree(tmp, ignore_errors=True)
 print()
