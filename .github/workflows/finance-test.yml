@@ -1,0 +1,39 @@
+name: Finance plugin test
+
+# Runs the personal finance checks on real Windows (DPAPI encryption, Qt card)
+# for pull requests that touch the finance plugin.
+
+on:
+  pull_request:
+    paths:
+      - "plugins/personal_finance.py"
+      - "plugins/_finance_*.py"
+      - "packaging/finance_selftest.py"
+      - "core/plugin_loader.py"
+      - ".github/workflows/finance-test.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install what the finance plugin uses
+        run: python -m pip install PyQt6 cryptography
+      - name: Finance self-test (Windows, live rate fetch)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python packaging/finance_selftest.py --live
+      - name: Upload card screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: finance-screenshots
+          path: "finance_*_selftest.png"
+          if-no-files-found: ignore
