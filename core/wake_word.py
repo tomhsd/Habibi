@@ -37,6 +37,20 @@ else:
     WAKE_PHRASE = "Hey Jarvis"
 # Score in [0,1]; above this counts as a detection. Tunable per environment.
 DEFAULT_THRESHOLD = 0.5
+# openwakeword's package __init__ imports its own submodules. When two threads
+# import it at the same moment (the settings check on the UI thread and the
+# detector starting on the voice thread), one of them can get the half-built
+# module: "partially initialized module 'openwakeword' has no attribute
+# 'get_pretrained_model_paths'". Every import of it goes through this lock.
+_OWW_IMPORT_LOCK = threading.Lock()
+
+
+def _import_oww(sub: str = ""):
+    import importlib
+    with _OWW_IMPORT_LOCK:
+        return importlib.import_module("openwakeword" + (f".{sub}" if sub else ""))
+
+
 # Mic frames arrive at 16 kHz int16; this is just the detector's input rate.
 SAMPLE_RATE = 16000
 
@@ -61,7 +75,7 @@ def is_ready() -> bool:
     if not is_installed():
         return False
     try:
-        import openwakeword
+        openwakeword = _import_oww()
         models_dir = Path(openwakeword.__file__).resolve().parent / "resources" / "models"
         if not models_dir.is_dir():
             return False
@@ -101,7 +115,7 @@ def install_and_download(logger: Callable[[str], None] = print) -> tuple[bool, s
         # Download the pretrained melspectrogram/embedding + wake models.
         logger("Wake word: downloading models…")
         try:
-            import openwakeword.utils as _u
+            _u = _import_oww("utils")
             try:
                 _u.download_models([_BUILTIN_MODEL])
             except TypeError:
@@ -142,8 +156,9 @@ class WakeWordDetector:
         if self._running:
             return True
         try:
-            from openwakeword.model import Model
-            self._model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
+            Model = _import_oww("model").Model
+            with _OWW_IMPORT_LOCK:      # Model() imports more of the package
+                self._model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
         except Exception as e:
             self._logger(f"Wake word: could not load model — {e}")
             self._model = None
