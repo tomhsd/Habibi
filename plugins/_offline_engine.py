@@ -41,6 +41,7 @@ ONLINE_ONLY = ("web search, live news, weather, YouTube, flights, sending messag
                "coding help, reading or understanding the screen with AI")
 DESC_LIMIT = 300
 MAX_TOOL_ROUNDS = 3
+REPLY_TOKENS = 90               # ~1–2 spoken sentences; at ~9 tok/s on CPU ≈ 10 s max
 HISTORY_TURNS = 8
 
 
@@ -353,8 +354,8 @@ class Mouth:
 
 SYSTEM_PROMPT = (
     "You are {name}, a friendly voice assistant running OFFLINE on the user's "
-    "Windows PC. Reply in the user's language, in one to three short spoken "
-    "sentences, no lists or markdown. Use a tool when the user asks you to do "
+    "Windows PC. Reply in the user's language in ONE short spoken sentence "
+    "(two at most), no lists or markdown, no filler. Use a tool when the user asks you to do "
     "something on the PC. These need the internet and are unavailable right now: "
     "{online_only}. If asked for one, say briefly that it needs the internet and "
     "you'll be able to do it when the connection is back. For news headlines or "
@@ -403,10 +404,25 @@ class Brain:
             self.error = f"Ollama isn't reachable: {e}"
             return False
 
+    def warm_up(self) -> None:
+        """Load the model into memory ahead of the first question (the first
+        call is ~3x slower than the rest). Never raises."""
+        if self._post is not None:
+            return
+        try:
+            import requests
+            requests.post(f"{self._url()}/api/chat", json={
+                "model": self.model, "messages": [{"role": "user", "content": "hi"}],
+                "stream": False, "keep_alive": "30m", "options": {"num_predict": 1},
+            }, timeout=180)
+        except Exception as e:
+            print(f"[Offline] warm-up skipped: {e}")
+
     def _chat(self, messages: list[dict]) -> dict:
         payload = {
             "model": self.model, "messages": messages, "stream": False,
-            "keep_alive": "30m", "options": {"num_predict": 220, "temperature": 0.4},
+            "keep_alive": "30m", "options": {"num_predict": REPLY_TOKENS, "temperature": 0.4,
+                                              "num_ctx": 4096},
         }
         if self.tools:
             payload["tools"] = self.tools
@@ -563,6 +579,12 @@ class OfflineAssistant:
     async def run(self, keep_going: Callable[[], bool]) -> None:
         """Listen until keep_going() is False. Typed commands work throughout."""
         loop = asyncio.get_running_loop()
+
+        def _warm():
+            self.brain_ok = self.brain.available()
+            if self.brain_ok:
+                self.brain.warm_up()
+        loop.run_in_executor(None, _warm)          # load the model while we set up the mic
         if getattr(self.host, "_wake_enabled", False):
             try:
                 self.host._ensure_wake_detector()     # wake word keeps working offline
