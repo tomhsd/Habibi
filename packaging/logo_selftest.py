@@ -23,6 +23,10 @@ sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
 FAILS: list[str] = []
+try:   # Windows CI console is cp1252; test names have symbols
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 
 def check(name: str, ok: bool, detail="") -> None:
