@@ -41,6 +41,24 @@ SIZES = [
 
 app = QApplication(sys.argv)
 win = ui.MainWindow("")
+from PyQt6.QtGui import QFontInfo, QFontMetrics  # noqa: E402
+_f = ui._mono(10, True)
+print(f"font: {QFontInfo(_f).family()}  dpi={app.primaryScreen().logicalDotsPerInch()}  "
+      f"'MMMMMMMMMM' bold10={QFontMetrics(_f).horizontalAdvance('MMMMMMMMMM')}px")
+
+
+def widest(w, depth=0, out=None, lim=140):
+    """The widgets that set a rail's minimum width (printed when it clips)."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QWidget
+    out = [] if out is None else out
+    for c in w.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly):
+        m = c.minimumSizeHint().width()
+        if m >= lim and c.isVisibleTo(win):
+            t = c.text() if hasattr(c, "text") and callable(c.text) else ""
+            out.append(f"{'  ' * depth}{type(c).__name__} {m}px {str(t)[:30]!r}")
+            widest(c, depth + 1, out, lim)
+    return out
 avail = app.primaryScreen().availableGeometry()
 check("opens inside the screen's free area",
       win.width() <= avail.width() and win.height() <= avail.height(),
@@ -61,10 +79,18 @@ for W, H in SIZES:
     mh = win.minimumSizeHint()
     check(f"{tag}: layout fits the window", mh.width() <= W and mh.height() <= H,
           f"needs {mh.width()}x{mh.height()}")
+    if mh.width() > W and tag in ("780x520", "1280x680"):
+        lay = win.centralWidget().layout()
+        for i in range(lay.count()):
+            it = lay.itemAt(i)
+            print(f"      row {i}: min {it.minimumSize().width()}px")
+        print("\n".join("      " + x for x in widest(lay.itemAt(0).widget(), lim=40)))
     for name, sa in (("left rail", left_sa), ("right rail", win._right_panel)):
         need = sa.widget().minimumSizeHint().width()
         room = sa.width() - 5          # minus the thin scrollbar
         check(f"{tag}: {name} cards not clipped", need <= room, f"cards {need}px, rail {room}px")
+        if need > room and tag == "1093x582":
+            print("\n".join("      " + x for x in widest(sa.widget())))
     inp = win._input.mapTo(win, win._input.rect().bottomRight())
     check(f"{tag}: chat box on screen", inp.x() <= W and inp.y() <= H, f"{inp.x()},{inp.y()}")
     c = win._center_split
