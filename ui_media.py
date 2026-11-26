@@ -566,6 +566,34 @@ def _slider_css() -> str:
     """
 
 
+class _ElideLabel(QLabel):
+    """One-line label that never asks for more width than it gets: long titles
+    end in "…" instead of pushing the sidebar wider than the screen."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._full = ""
+        from PyQt6.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(10)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:            # noqa: N802 (Qt name)
+        self._full = str(text or "")
+        self._elide()
+
+    def text(self) -> str:                           # noqa: N802
+        return self._full
+
+    def resizeEvent(self, e):                        # noqa: N802
+        super().resizeEvent(e)
+        self._elide()
+
+    def _elide(self) -> None:
+        w = max(10, self.width() - 2)
+        super().setText(self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, w))
+
+
 class MediaCard(U.CornerCard):
     want_video = pyqtSignal(bool)        # show the video in the reactor area or not
 
@@ -577,7 +605,7 @@ class MediaCard(U.CornerCard):
         self.spectrum = Spectrum(engine)
         lay.addWidget(self.spectrum)
 
-        self.now = QLabel("No media — open files or ask Habibi")
+        self.now = _ElideLabel("No media — open files or ask Habibi")
         self.now.setFont(U._mono(9, True))
         self.now.setStyleSheet(f"color: {U.C.WHITE}; background: transparent;")
         self.now.setWordWrap(False)
@@ -714,8 +742,7 @@ class MediaCard(U.CornerCard):
     def _refresh_external(self):
         e, src = self.e, self.e.src
         playing = e.playing()
-        self.now.setText(self.fontMetrics().elidedText(
-            "▶ " + (e.title() or f"Loading from {src.name}…"), Qt.TextElideMode.ElideRight, 260))
+        self.now.setText("▶ " + (e.title() or f"Loading from {src.name}…"))
         self.now.setToolTip(src.link())
         state = ("LOADING" if src.loading() else "PLAYING" if playing else
                  "PAUSED" if e.paused() else "STOPPED")
@@ -745,8 +772,7 @@ class MediaCard(U.CornerCard):
         if c is None:
             self.set_extra("IDLE", U.C.TEXT_DIM)
         else:
-            self.now.setText(self.fontMetrics().elidedText(
-                e.title() or c.stem, Qt.TextElideMode.ElideRight, 260))
+            self.now.setText(e.title() or c.stem)
             self.now.setToolTip(str(c))
             state = "PLAYING" if playing else "PAUSED" if e.paused() else "STOPPED"
             self.set_extra(f"{state}  {e.index + 1}/{len(e.playlist)}",
