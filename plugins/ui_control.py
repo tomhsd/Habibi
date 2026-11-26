@@ -10,6 +10,7 @@ web pages, images), use screen_text (OCR) instead.
 """
 from __future__ import annotations
 
+import re
 import time
 
 from core import automation as A
@@ -108,11 +109,42 @@ def _visible(el) -> bool:
         return True
 
 
+def _hints(el) -> str:
+    """Other words an element is known by: tooltip/help text, placeholder,
+    accessible description (icon buttons and search boxes often have no name)."""
+    out = []
+    try:
+        out.append(el.element_info.element.CurrentHelpText or "")
+    except Exception:
+        pass
+    try:
+        lp = el.legacy_properties()
+        out += [lp.get("Description", "") or "", lp.get("Help", "") or ""]
+    except Exception:
+        pass
+    try:
+        out.append(el.element_info.element.CurrentItemStatus or "")
+    except Exception:
+        pass
+    return " ".join(x for x in out if x).strip().lower()
+
+
+def _candidates(win, control_type: str = ""):
+    """Elements to search. For one control type ask UI Automation directly
+    (fast, reaches deep into browser/Electron pages); else walk the tree."""
+    if control_type:
+        try:
+            return win.descendants(control_type=control_type)
+        except Exception:
+            pass
+    return _walk(win)
+
+
 def _find(win, name: str, control_type: str = ""):
     q = name.strip().lower()
     want = control_type.strip().lower()
     best, best_score = None, -1
-    for el in _walk(win):
+    for el in _candidates(win, control_type):
         n, ct, aid = _info(el)
         if want and ct.lower() != want:
             continue
@@ -125,6 +157,8 @@ def _find(win, name: str, control_type: str = ""):
             score = 50
         elif q and q in al:
             score = 40
+        elif q and len(q) > 2 and q in _hints(el):
+            score = 45
         else:
             continue
         if ct in _PREFERRED:
@@ -201,7 +235,13 @@ def _main_editable(win):
     except Exception:
         pass
     best, area = None, -1
-    for el in _walk(win):
+    cands = []
+    for ct in ("Edit", "Document"):
+        try:
+            cands += win.descendants(control_type=ct)
+        except Exception:
+            pass
+    for el in cands or _walk(win):
         if _info(el)[1] in ("Edit", "Document") and _visible(el):
             try:
                 r = el.rectangle()
@@ -280,8 +320,22 @@ def _list_elements(win, query: str, control_type: str) -> str:
 def _click(win, name: str, control_type: str, double: bool, right: bool) -> str:
     el = _find(win, name, control_type)
     if el is None:
-        return (f"No '{name}' found in '{win.window_text()}'. Use action list_elements to see "
-                f"what is there, or screen_text click_text for things UI Automation can't see.")
+        pt = _vision_point(win, f"the '{name}' {control_type or 'button or control'}")
+        if pt is None:
+            return (f"No '{name}' found in '{win.window_text()}'. Use action list_elements to see "
+                    f"what is there, or screen_text click_text for things UI Automation can't see.")
+
+        def _do_pt() -> str:
+            safety.check_stop()
+            if not _bring_front(win):
+                return f"Didn't click: '{win.window_text()}' wouldn't come to the front."
+            before = A.snapshot()
+            import pyautogui
+            pyautogui.click(pt[0], pt[1], clicks=2 if double else 1, button="right" if right else "left")
+            return f"Clicked '{name}' (found by looking at the window) at {pt}. " + A.describe_change(before)
+
+        return safety.guarded("destructive" if A.is_destructive(name) else "input",
+                              f"Click '{name}'", f"in {win.window_text()}", _do_pt)
     n, ct, _ = _info(el)
     kind = "destructive" if A.is_destructive(n) else "input"
 
@@ -307,6 +361,42 @@ def _click(win, name: str, control_type: str, double: bool, right: bool) -> str:
     return safety.guarded(kind, f"Click '{n}'", f"in {win.window_text()}", _do)
 
 
+def _vision_point(win, what: str):
+    """Last resort when UI Automation can't see it: look at a picture of the
+    window (Gemini, 0-1000 box) and return screen x,y."""
+    try:
+        import importlib
+        cc = importlib.import_module("actions.computer_control")
+        return cc._screen_find(what, win.window_text())
+    except Exception:
+        return None
+
+
+def _press(win, keys: str) -> str:
+    """Press keys (Enter, Tab, Esc, ctrl+s…) in THIS window, checked in front."""
+    from core import target
+    from pywinauto.keyboard import send_keys
+    names = {"enter": "{ENTER}", "return": "{ENTER}", "tab": "{TAB}", "esc": "{ESC}",
+             "escape": "{ESC}", "backspace": "{BACKSPACE}", "delete": "{DELETE}", "space": " ",
+             "up": "{UP}", "down": "{DOWN}", "left": "{LEFT}", "right": "{RIGHT}",
+             "home": "{HOME}", "end": "{END}", "pageup": "{PGUP}", "pagedown": "{PGDN}"}
+    mods = {"ctrl": "^", "control": "^", "shift": "+", "alt": "%"}
+    k = (keys or "enter").strip().lower()
+    parts = [x.strip() for x in k.split("+") if x.strip()]
+    seq = "".join(mods.get(x, "") for x in parts[:-1])
+    last = parts[-1] if parts else "enter"
+    seq += names.get(last, ("{" + last.upper() + "}") if re.fullmatch(r"f\d{1,2}", last) else last)
+    if not _bring_front(win):
+        return f"Didn't press {keys}: '{win.window_text()}' wouldn't come to the front."
+    before = A.snapshot()
+    try:
+        target.require_front(win.handle)
+        send_keys(seq)
+    except target.FocusLost as e:
+        return str(e)
+    return f"Pressed {keys} in '{win.window_text()}'. " + A.describe_change(before)
+
+
 def _type(win, text: str, field: str, clear: bool, enter: bool) -> str:
     from core import target
 
@@ -315,8 +405,34 @@ def _type(win, text: str, field: str, clear: bool, enter: bool) -> str:
         before = A.snapshot()
         hwnd = win.handle
         target_el = _find_field(win, field) if field else _main_editable(win)
-        if field and target_el is None:
-            return f"No field '{field}' found in '{win.window_text()}'. Nothing was typed."
+        if target_el is None:
+            # UI Automation can't see a box (canvas apps, some web pages): find it by
+            # looking, click into it, then type real keys into that window only.
+            pt = _vision_point(win, f"the '{field}' text input box" if field else "the main text input box")
+            if pt is None:
+                return (f"No {'field ' + repr(field) if field else 'text box'} found in "
+                        f"'{win.window_text()}'. Nothing was typed.")
+            if not _bring_front(win):
+                return f"Nothing typed: '{win.window_text()}' wouldn't come to the front."
+            import pyautogui
+            pyautogui.click(pt[0], pt[1])
+            time.sleep(0.2)
+            from pywinauto.keyboard import send_keys
+            try:
+                target.require_front(hwnd)
+                if clear:
+                    send_keys("^a{BACKSPACE}")
+                for i in range(0, len(text), 40):
+                    safety.check_stop()
+                    target.require_front(hwnd)
+                    send_keys(_escape_keys(text[i:i + 40]), with_spaces=True, pause=0.01, vk_packet=True)
+                if enter:
+                    target.require_front(hwnd)
+                    send_keys("{ENTER}")
+            except target.FocusLost as e:
+                return str(e)
+            return (f"Typed {len(text)} characters into the box I found by looking at "
+                    f"'{win.window_text()}'" + (" and pressed Enter. " if enter else ". ") + A.describe_change(before))
         where = f"'{field}'" if field else "the text box"
 
         # 1. Fill the field directly through UI Automation (needs no focus, can't go astray)
@@ -364,10 +480,11 @@ def _type(win, text: str, field: str, clear: bool, enter: bool) -> str:
             return str(e)
         if target_el is not None and text.strip():
             time.sleep(0.2)
-            if text.strip()[:30] in _value(target_el):
+            if not enter and text.strip()[:30] in _value(target_el):
                 return (f"Typed {len(text)} characters into {where} of "
                         f"'{win.window_text()}'. ✓ Checked: the text is there.")
-        return f"Typed {len(text)} characters into {where} of '{win.window_text()}'. " + A.describe_change(before)
+        return (f"Typed {len(text)} characters into {where} of '{win.window_text()}'"
+                + (" and pressed Enter. " if enter else ". ") + A.describe_change(before))
 
     return safety.guarded("input", "Type text", text[:80], _do)
 
@@ -420,7 +537,10 @@ def ui_control(parameters: dict, player=None) -> str:
                          bool(parameters.get("clear", False)), bool(parameters.get("enter", False)))
         if action == "read":
             return _read(win, str(parameters.get("name", "")))
-        return "Unknown action. Use list_windows, focus, list_elements, click, type or read."
+        if action in ("press", "key", "enter"):
+            keys = str(parameters.get("keys", "") or parameters.get("key", "") or "enter")
+            return safety.guarded("input", f"Press {keys}", f"in {win.window_text()}", lambda: _press(win, keys))
+        return "Unknown action. Use list_windows, focus, list_elements, click, type, read or press."
     except (LookupError, PermissionError) as e:
         return str(e)
     except ImportError:
@@ -434,21 +554,24 @@ PLUGIN = {
         "lists by their NAME through Windows UI Automation (no pixel guessing). Prefer this over "
         "computer_control clicks. Actions: list_windows; focus(window); list_elements(window, "
         "query, control_type) — see what can be clicked; click(name, window, control_type, double, "
-        "right); type(text, name=field, window, clear, enter); read(window, name). `window` is part "
-        "of the title (blank = window in front). Every click/type reports whether the screen "
+        "right); type(text, name=field, window, clear, enter) — set enter=true whenever the user says "
+        "send/submit/press Enter; press(keys, window) — Enter, Tab, Esc, ctrl+s… in that app; "
+        "read(window, name). `window` is the app name or part of the title (blank = the app you were using). "
+        "If a button or field has no name, it is found by looking at the window. Every click/type reports whether the screen "
         "changed — if it says nothing changed, try list_elements, then screen_text click_text."
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
-            "action": {"type": "STRING", "description": "list_windows | focus | list_elements | click | type | read"},
+            "action": {"type": "STRING", "description": "list_windows | focus | list_elements | click | type | read | press"},
             "window": {"type": "STRING", "description": "Part of the window title; blank = front window"},
             "name": {"type": "STRING", "description": "Name of the button/menu/field, e.g. 'Save', 'File', 'Search'"},
             "control_type": {"type": "STRING", "description": "Optional: Button, MenuItem, Edit, ListItem, TabItem, CheckBox, Hyperlink…"},
             "query": {"type": "STRING", "description": "list_elements: only names containing this"},
             "text": {"type": "STRING", "description": "Text to type"},
             "clear": {"type": "BOOLEAN", "description": "type: replace existing text"},
-            "enter": {"type": "BOOLEAN", "description": "type: press Enter afterwards"},
+            "enter": {"type": "BOOLEAN", "description": "type: press Enter afterwards (send/submit)"},
+            "keys": {"type": "STRING", "description": "press: key or combo, e.g. 'enter', 'tab', 'ctrl+s'"},
             "double": {"type": "BOOLEAN", "description": "click: double-click"},
             "right": {"type": "BOOLEAN", "description": "click: right-click"},
         },

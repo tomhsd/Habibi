@@ -160,6 +160,22 @@ def find_text(words: list[dict], query: str) -> list[dict]:
                 exact = " ".join(toks[i:i + len(q)]) == " ".join(q)
                 hits.append({"text": " ".join(w["text"] for w in span),
                              "x": (x0 + x1) / 2, "y": (y0 + y1) / 2, "exact": exact})
+    if not hits:                      # OCR slips ('Sumbit', 'L0gin'): accept close matches
+        import difflib
+        want = " ".join(q)
+        for line in by_line.values():
+            toks = [_norm(w["text"]) for w in line]
+            for i in range(len(line)):
+                j = i + len(q)
+                if j > len(line):
+                    break
+                got = " ".join(toks[i:j])
+                if len(want) >= 4 and difflib.SequenceMatcher(None, got, want).ratio() >= 0.8:
+                    span = line[i:j]
+                    x0 = min(w["x"] for w in span); y0 = min(w["y"] for w in span)
+                    x1 = max(w["x"] + w["w"] for w in span); y1 = max(w["y"] + w["h"] for w in span)
+                    hits.append({"text": " ".join(w["text"] for w in span),
+                                 "x": (x0 + x1) / 2, "y": (y0 + y1) / 2, "exact": False})
     hits.sort(key=lambda h: (not h["exact"], h["y"], h["x"]))
     return hits
 
@@ -178,7 +194,9 @@ def screen_text(parameters: dict, player=None) -> str:
     if err:
         return err
     action = str(parameters.get("action", "read"))
-    area = "window" if str(parameters.get("area", "screen")) == "window" else "screen"
+    # Default: just the app you're using. Reading the whole desktop (Habibi's HUD,
+    # other windows) is what made it pick the wrong text in busy screens.
+    area = "screen" if str(parameters.get("area", "") or "").lower() in ("screen", "all", "desktop") else "window"
     text = str(parameters.get("text", ""))
     try:
         if action == "read":
@@ -236,14 +254,14 @@ PLUGIN = {
         "can't find. Actions: read(area) — all text on screen or in the front window; "
         "find(text) — where a text appears; click_text(text, occurrence, double, right, "
         "offset_x, offset_y) — click it (offsets click next to the text, e.g. a box beside a "
-        "label); wait_for(text, timeout) — wait until it appears. area: screen | window."
+        "label); wait_for(text, timeout) — wait until it appears. area: window (default) | screen."
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {"type": "STRING", "description": "read | find | click_text | wait_for"},
             "text": {"type": "STRING", "description": "The visible text to find/click, e.g. 'Downloads'"},
-            "area": {"type": "STRING", "description": "screen (default) or window (front window only)"},
+            "area": {"type": "STRING", "description": "window (default: the app you are using) or screen (all monitors)"},
             "occurrence": {"type": "INTEGER", "description": "Which match to click if the text appears several times (1 = first, top-to-bottom)"},
             "double": {"type": "BOOLEAN", "description": "Double-click"},
             "right": {"type": "BOOLEAN", "description": "Right-click"},
