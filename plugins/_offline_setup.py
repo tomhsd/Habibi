@@ -35,18 +35,43 @@ def _base_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+# faster-whisper and piper-tts need PyAV ("av"), which only ships ready-made
+# Windows builds for supported Python versions; on newer ones pip tries to
+# compile it and fails. Above this version we don't try.
+NEWEST_PYTHON = (3, 14)
+
+
+def python_hint() -> str:
+    """What to do when this Python can't install the offline voice."""
+    venv = _base_dir() / ".venv312" / "Scripts" / "pythonw.exe"
+    if venv.exists():
+        return ("Close Habibi and start it with 'Start Habibi (offline-ready).bat' — "
+                "that copy uses Python 3.12 and already has the offline voice installed.")
+    return ("Install Python 3.12 and run Habibi with it, or use HabibiSetup.exe, "
+            "which already includes the offline voice.")
+
+
 def _pip(pkgs: list[str], log) -> bool:
     if getattr(sys, "frozen", False):
         return True
     missing = [p for p, mod in pkgs if importlib.util.find_spec(mod) is None]
     if not missing:
         return True
+    ver = ".".join(map(str, sys.version_info[:2]))
+    if sys.version_info[:2] > NEWEST_PYTHON:
+        log(f"ERR: Offline voice can't be installed on Python {ver}. {python_hint()}")
+        return False
     log(f"SYS: Offline setup: installing {', '.join(missing)}…")
     r = subprocess.run([sys.executable, "-m", "pip", "install", *missing,
                         "--disable-pip-version-check", "--quiet"],
                        capture_output=True, text=True, creationflags=NO_WINDOW)
     if r.returncode != 0:
-        log(f"ERR: pip failed: {(r.stderr or r.stdout)[-300:]}")
+        out = r.stderr or r.stdout or ""
+        if "Failed to build" in out and "av" in out:
+            log(f"ERR: Offline voice can't be installed on Python {ver} "
+                f"(its audio library has no ready-made build for it). {python_hint()}")
+        else:
+            log(f"ERR: pip failed: {out[-300:]}")
         return False
     importlib.invalidate_caches()
     return True
@@ -140,4 +165,6 @@ def run_setup(values: dict, log: Callable[[str], None] = print) -> tuple[bool, s
         return True, msg
     if failed == ["voice"]:
         return True, "Ready (using the Windows voice — the Piper voice didn't download)."
+    if "packages" in failed:
+        return False, "Speech can't be installed here. " + python_hint()
     return False, "Not finished: " + ", ".join(failed) + " — see the log, then try again."

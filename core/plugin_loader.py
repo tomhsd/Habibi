@@ -38,6 +38,7 @@ class PluginRecord:
     # optional voice takeover (e.g. offline mode): see PluginRegistry.voice_takeover
     voice_wants: Optional[Callable] = None     # voice_takeover(host, failures) -> bool
     voice_session: Optional[Callable] = None   # async voice_session(host): runs until it hands back
+    sleep_listener: Optional[Callable] = None  # sleep_listener(host) -> feed(frame) | None (wake words)
     mtime: float = 0.0
 
 
@@ -209,6 +210,25 @@ class PluginRegistry:
                 self._logger(f"Plugin '{name}' setup_ui failed: {e}")
                 traceback.print_exc()
 
+    # -- called by main.py once: plugins that listen while Habibi sleeps --
+    def sleep_listeners(self, host) -> list[Callable]:
+        """For enabled plugins that define sleep_listener(host): call it and collect
+        the feed(int16_frame) callables it returns (None = not available). The core
+        hands every mic frame heard while asleep to each feed; a plugin wakes Habibi
+        with host.wake(reason). Used for extra wake words. Never raises."""
+        out: list[Callable] = []
+        for name, rec in self._plugins.items():
+            if rec.sleep_listener is None or not get_plugin_enabled(name):
+                continue
+            try:
+                feed = rec.sleep_listener(host)
+                if callable(feed):
+                    out.append(feed)
+            except Exception as e:
+                self._logger(f"Plugin '{name}' sleep_listener failed: {e}")
+                traceback.print_exc()
+        return out
+
     # -- called by main.py before each Gemini connect: optional voice takeover --
     def voice_takeover(self, host, failures: int = 0) -> Optional[PluginRecord]:
         """Ask enabled plugins that declare BOTH voice_takeover(host, failures) and
@@ -323,6 +343,10 @@ def _validate(module, filename: str) -> PluginRecord:
     if not callable(ui_setup):
         ui_setup = None
 
+    sleep_listener = getattr(module, "sleep_listener", None)
+    if not callable(sleep_listener):
+        sleep_listener = None
+
     # Optional voice takeover: both halves are needed, and the session must be async.
     voice_wants = getattr(module, "voice_takeover", None)
     voice_session = getattr(module, "voice_session", None)
@@ -331,7 +355,8 @@ def _validate(module, filename: str) -> PluginRecord:
 
     return PluginRecord(name=name, description=description.strip(), parameters=parameters,
                          run=run_fn, file=filename, valid=True, error="", settings=settings,
-                         ui_setup=ui_setup, voice_wants=voice_wants, voice_session=voice_session)
+                         ui_setup=ui_setup, voice_wants=voice_wants, voice_session=voice_session,
+                         sleep_listener=sleep_listener)
 
 
 def _load_file(path: Path, core_tool_names: set[str], valid: dict) -> PluginRecord:

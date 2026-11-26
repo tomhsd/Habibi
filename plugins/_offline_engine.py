@@ -564,6 +564,9 @@ class OfflineAssistant:
                     det.feed(block.reshape(-1, 1))
                 except Exception:
                     pass
+            feed = getattr(host, "feed_sleep_listeners", None)   # plugin wake words
+            if feed is not None:
+                feed(block.reshape(-1, 1))
             return False
         return True
 

@@ -40,6 +40,28 @@ if _platform.system() == "Windows":
 # locale. `errors="replace"` is the belt and braces — a console that genuinely
 # cannot render a glyph shows a box instead of killing the process.
 import sys as _sys
+
+# Started with pythonw (the .bat, auto-start) there is no console: print() goes
+# nowhere and a problem leaves no trace. Write it to logs/habibi.log instead
+# (the last run only, so it never grows).
+if _sys.stdout is None or _sys.stderr is None:
+    try:
+        import os as _os
+        _log_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "logs")
+        _os.makedirs(_log_dir, exist_ok=True)
+        _logf = open(_os.path.join(_log_dir, "habibi.log"), "w", encoding="utf-8",
+                     errors="replace", buffering=1)
+        _sys.stdout = _sys.stdout or _logf
+        _sys.stderr = _sys.stderr or _logf
+    except Exception:
+        pass
+
+# sounddevice sets array.shape on every mic block; NumPy 2.5 warns about that
+# each time, which floods the log. Harmless — hide it.
+import warnings as _warnings
+_warnings.filterwarnings("ignore", message="Setting the shape on a NumPy array",
+                         category=DeprecationWarning)
+
 for _stream in (_sys.stdout, _sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")
@@ -88,9 +110,9 @@ from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
 from core                      import audio_devices
 from core.action_loader        import discover_actions
+import core.wake_word as _wake_mod   # WAKE_PHRASE can be changed by a plugin
 from core.wake_word            import (
     WakeWordDetector, is_ready as wake_is_ready, install_and_download as wake_install,
-    WAKE_PHRASE,
 )
 
 # How long the assistant stays awake with no user speech before it auto-sleeps
@@ -534,6 +556,7 @@ class HabibiLive:
         self._wake_enabled     = get_wake_word_enabled()
         self._awake            = not self._wake_enabled
         self._wake_detector: WakeWordDetector | None = None
+        self._sleep_feeds: list | None = None   # plugin wake words (sleep_listener hook)
         self._wake_sleep_timeout = WAKE_SLEEP_TIMEOUT
         # UI control surface for the Wake Word settings section.
         self.ui.wake_is_ready    = wake_is_ready          # () -> bool
@@ -561,6 +584,22 @@ class HabibiLive:
             return self._wake_detector.start()
         return True
 
+    def feed_sleep_listeners(self, frame) -> None:
+        """Hand a mic frame heard while asleep to plugin wake-word listeners.
+        Called from the mic thread; each feed must only queue the frame."""
+        feeds = self._sleep_feeds
+        if feeds is None:
+            try:
+                feeds = self._plugin_registry.sleep_listeners(self)
+            except Exception:
+                feeds = []
+            self._sleep_feeds = feeds
+        for f in feeds:
+            try:
+                f(frame)
+            except Exception:
+                pass
+
     def _on_wake_detected(self) -> None:
         """Called from the detector thread when the wake phrase is heard."""
         self.wake(reason="wake word")
@@ -580,7 +619,7 @@ class HabibiLive:
         self._awake = False
         self.set_speaking(False)
         self.ui.set_state("SLEEPING")
-        self.ui.write_log(f"SYS: Sleeping — {reason}. Say '{WAKE_PHRASE}' to wake me.")
+        self.ui.write_log(f"SYS: Sleeping — {reason}. Say '{_wake_mod.WAKE_PHRASE}' to wake me.")
 
     async def _run_sleep_watch(self) -> None:
         """Auto-sleep after the configured silence window (wake-word mode only)."""
@@ -855,7 +894,7 @@ class HabibiLive:
         # asleep either (the sleep gate is not just for the mic). Wake first with
         # the wake phrase or the WAKE NOW button.
         if self._wake_enabled and not self._awake:
-            self.ui.write_log(f"SYS: I'm asleep — say '{WAKE_PHRASE}' or tap WAKE NOW first.")
+            self.ui.write_log(f"SYS: I'm asleep — say '{_wake_mod.WAKE_PHRASE}' or tap WAKE NOW first.")
             return
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
@@ -1260,7 +1299,15 @@ class HabibiLive:
         print("[HABIBI] 🎤 Mic started")
         loop = asyncio.get_event_loop()
 
+        # Where the mic audio goes, counted per block and printed every 10 s,
+        # so "Habibi doesn't hear me" can be read straight from the log.
+        mic_stat = {"asleep": 0, "speaking": 0, "muted": 0, "phone": 0, "sent": 0, "peak": 0}
+
         def callback(indata, frames, time_info, status):
+            try:
+                mic_stat["peak"] = max(mic_stat["peak"], int(abs(indata).max()))
+            except Exception:
+                pass
             # ── Wake-word gate ───────────────────────────────────────────────
             # While asleep, the mic audio NEVER goes to Gemini (nothing is
             # streamed, so HABIBI can't respond to speech not addressed to it and
@@ -1272,6 +1319,8 @@ class HabibiLive:
                 det = self._wake_detector
                 if det is not None:
                     det.feed(indata)
+                self.feed_sleep_listeners(indata)
+                mic_stat["asleep"] += 1
                 return
             with self._speaking_lock:
                 habibi_speaking = self._is_speaking
@@ -1284,8 +1333,16 @@ class HabibiLive:
                         loop.call_soon_threadsafe(self._on_barge_in)
                 except Exception:
                     pass
+                mic_stat["speaking"] += 1
                 return
+            if habibi_speaking:
+                mic_stat["speaking"] += 1
+            elif self.ui.muted:
+                mic_stat["muted"] += 1
+            elif self._phone_active:
+                mic_stat["phone"] += 1
             if not habibi_speaking and not self.ui.muted and not self._phone_active:
+                mic_stat["sent"] += 1
                 data = indata.tobytes()
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
@@ -1335,8 +1392,14 @@ class HabibiLive:
 
             with _mic_stream:
                 print("[HABIBI] 🎤 Mic stream open")
+                _last_stat = time.monotonic()
                 while True:
                     await asyncio.sleep(0.1)
+                    if time.monotonic() - _last_stat >= 10:
+                        _last_stat = time.monotonic()
+                        print("[MicStat] " + " ".join(f"{k}={v}" for k, v in mic_stat.items()))
+                        for k in mic_stat:
+                            mic_stat[k] = 0
         except Exception as e:
             print(f"[HABIBI] ❌ Mic: {e}")
             raise
@@ -1958,7 +2021,7 @@ class HabibiLive:
                         self._ensure_wake_detector()
                         self._awake = False
                         self.ui.set_state("SLEEPING")
-                        self.ui.write_log(f"SYS: HABIBI online — sleeping. Say '{WAKE_PHRASE}' to wake me.")
+                        self.ui.write_log(f"SYS: HABIBI online — sleeping. Say '{_wake_mod.WAKE_PHRASE}' to wake me.")
                     else:
                         self._awake = True
                         self.ui.set_state("LISTENING")

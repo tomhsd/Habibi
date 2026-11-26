@@ -6235,8 +6235,14 @@ class MainWindow(QMainWindow):
         if self.on_interrupt:
             self.on_interrupt()
 
-    def _toggle_mute(self):
+    def _toggle_mute(self, *_args, source: str = ""):
         self._muted = not self._muted
+        # Say in the log file what turned the mic on/off, so a mic that "stops
+        # hearing" can be traced to a click, the F4 key or a command.
+        if not source:
+            sender = self.sender()
+            source = type(sender).__name__ if sender is not None else "command"
+        print(f"[Mic] {'muted' if self._muted else 'unmuted'} by {source}")
         self.hud.muted = self._muted
         self._mic_strip.muted = self._muted
         self._style_mute_btn()

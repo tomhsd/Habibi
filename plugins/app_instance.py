@@ -9,6 +9,10 @@ the old one, and two assistants answer at once.
 Runs while plugins load (before the drawing hotkey and the Remote Control
 server start); the emergency-stop hotkey, which starts earlier, is registered
 again after the old copy is gone. Switch it off in ⚙ PLUGINS to allow two copies.
+
+Also: if Habibi was started with a Python that can't run the offline voice
+(Python 3.15 from an old shortcut or the auto-start entry) and the ready-made
+Python 3.12 copy (.venv312) is in the folder, it restarts itself with that one.
 """
 from __future__ import annotations
 
@@ -125,6 +129,45 @@ def close_others(log=print) -> int:
         return 0
 
 
+VENV_PYTHONW = BASE_DIR / ".venv312" / "Scripts" / "pythonw.exe"
+
+
+def should_switch_python(frozen: bool, current_exe: str, venv_exe: Path,
+                         has_offline_voice: bool, already_switched: bool) -> bool:
+    """True when Habibi was started with a Python that can't run the offline
+    voice (e.g. Python 3.15 from an old shortcut or auto-start entry) while the
+    ready-made Python 3.12 copy (.venv312) sits next to it. Pure, for tests."""
+    if frozen or already_switched or has_offline_voice:
+        return False
+    if not venv_exe.exists():
+        return False
+    return _norm(Path(current_exe).parent) != _norm(venv_exe.parent)
+
+
+def _switch_python(log=print) -> bool:
+    """Restart Habibi with .venv312 when needed. Returns True if it did."""
+    try:
+        import importlib.util
+        import subprocess
+        if sys.platform != "win32":
+            return False
+        has_voice = importlib.util.find_spec("faster_whisper") is not None
+        if not should_switch_python(getattr(sys, "frozen", False), sys.executable,
+                                    VENV_PYTHONW, has_voice,
+                                    os.environ.get("HABIBI_PY_SWITCHED") == "1"):
+            return False
+        env = dict(os.environ, HABIBI_PY_SWITCHED="1")
+        subprocess.Popen([str(VENV_PYTHONW), str(BASE_DIR / "main.py")],
+                         cwd=str(BASE_DIR), env=env,
+                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+        log("Started with a Python that can't run the offline voice — "
+            "restarting with Habibi's Python 3.12.")
+        return True
+    except Exception as e:
+        log(f"Couldn't switch to Python 3.12: {e}")
+        return False
+
+
 def _log(text: str) -> None:
     print(f"[Instances] {text}")
 
@@ -136,6 +179,8 @@ def _on_load() -> None:
             return
     except Exception:
         pass
+    if _switch_python(_log):
+        os._exit(0)                                   # the 3.12 copy takes over
     n = close_others(_log)
     if n:
         _log(f"Closed {n} older Habibi window(s).")
