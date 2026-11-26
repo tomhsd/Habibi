@@ -234,6 +234,7 @@ check(ran == [("open_app", {"app_name": "notepad"})], "local model's tool call r
 check(ans == "Notepad is open.", "local model answers after the tool result")
 check(calls[1]["messages"][-1]["role"] == "tool", "tool result goes back to the model")
 check("internet" in calls[0]["messages"][0]["content"], "system prompt says what needs internet")
+check(calls[0]["options"]["num_predict"] <= 120, "offline answers are kept short (fast on CPU)")
 ran.clear()
 brain.reply("search the news")
 check(ran == [], "a tool that isn't offered is never run")
