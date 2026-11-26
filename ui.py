@@ -1291,7 +1291,8 @@ class HudCanvas(QWidget):
         elif self.state in ("THINKING", "PROCESSING"):
             s_txt, s_col = self.state, qcol(C.ACC2)
         elif self.state == "LISTENING":
-            s_txt, s_col = "ONLINE", qcol(C.PRI)
+            s_txt = getattr(self, "online_word", "ONLINE")    # plugins may say e.g. OFFLINE
+            s_col = qcol(getattr(self, "online_color", None) or C.PRI)
         else:
             s_txt, s_col = self.state, qcol(C.PRI)
 
@@ -6146,19 +6147,23 @@ class MainWindow(QMainWindow):
         # The process log mirrors what the assistant is actually doing, so it
         # stays a readout rather than four decorative lines.
         if state == "MUTED":
-            self._set_proc("session", "ONLINE", C.PRI)
+            self._set_proc("session", getattr(self.hud, "online_word", "ONLINE"),
+                           getattr(self.hud, "online_color", None) or C.PRI)
             self._set_proc("stream", "PAUSED", C.TEXT_DIM)
             self._set_proc("listen", "MUTED", C.MUTED_C)
         elif state == "SPEAKING":
-            self._set_proc("session", "ONLINE", C.PRI)
+            self._set_proc("session", getattr(self.hud, "online_word", "ONLINE"),
+                           getattr(self.hud, "online_color", None) or C.PRI)
             self._set_proc("stream", "OUTBOUND", C.ACC)
             self._set_proc("listen", "HOLDING", C.TEXT_DIM)
         elif state in ("THINKING", "PROCESSING"):
-            self._set_proc("session", "ONLINE", C.PRI)
+            self._set_proc("session", getattr(self.hud, "online_word", "ONLINE"),
+                           getattr(self.hud, "online_color", None) or C.PRI)
             self._set_proc("stream", "WORKING", C.ACC2)
             self._set_proc("listen", "HOLDING", C.TEXT_DIM)
         elif state == "LISTENING":
-            self._set_proc("session", "ONLINE", C.PRI)
+            self._set_proc("session", getattr(self.hud, "online_word", "ONLINE"),
+                           getattr(self.hud, "online_color", None) or C.PRI)
             self._set_proc("stream", "ACTIVE", C.GREEN)
             self._set_proc("listen", "ACTIVE", C.GREEN)
         else:
@@ -6416,6 +6421,17 @@ class HabibiUI:
                 return
             lbl.setText(f"{APP_VERSION}  //  {text}" if text else f"{APP_VERSION}  //  ONLINE")
             lbl.setStyleSheet(f"color: {color or C.PRI_DIM}; background: transparent;")
+            # The centre word and the process log follow the badge's first word
+            # ("OFFLINE · LOCAL" -> OFFLINE), so the window never says ONLINE while offline.
+            hud = getattr(self._win, "hud", None)
+            if hud is not None:
+                hud.online_word = (text.split("·")[0].strip().upper() if text else "") or "ONLINE"
+                hud.online_color = color if text else None
+                hud.update()
+                try:
+                    self._win._apply_state(hud.state)
+                except Exception:
+                    pass
         try:
             self.run_in_ui(_apply, timeout=5)
         except Exception:
