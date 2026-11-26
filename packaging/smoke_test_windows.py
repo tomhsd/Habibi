@@ -155,7 +155,7 @@ run("computer_control", action="press", window="notepad", key="esc")
 _decoy.kill()
 
 # Enter and other keys go to the named app; Enter really pressed
-run("ui_control", action="type", window="notepad", text=" ENTER-A", clear=False)
+run("ui_control", action="type", window="notepad", text="ENTER-A", clear=True)
 check("ui_control press enter in Notepad", lambda: ("Pressed enter" in (r := run("ui_control", action="press", window="notepad", keys="enter")), r))
 check("ui_control type with enter=true reports Enter",
       lambda: ("pressed Enter" in (r := run("ui_control", action="type", window="notepad", text="ENTER-B", enter=True)), r))

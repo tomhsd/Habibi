@@ -441,6 +441,16 @@ def _type(win, text: str, field: str, clear: bool, enter: bool) -> str:
                 target_el.set_edit_text(text if clear else (target_el.get_value() or "") + text)
                 time.sleep(0.15)
                 if not text.strip() or text.strip()[:30] in _value(target_el):
+                    # put the cursor after the text, so a following Enter or more typing
+                    # continues there (setting the value leaves it at the start)
+                    try:
+                        if target.is_front(hwnd):
+                            target_el.set_focus()
+                            from pywinauto.keyboard import send_keys as _sk
+                            target.require_front(hwnd)
+                            _sk("^{END}")
+                    except Exception:
+                        pass
                     return (f"Typed {len(text)} characters into {where} of "
                             f"'{win.window_text()}'. ✓ Checked: the text is there.")
             except Exception:
