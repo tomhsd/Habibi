@@ -35,9 +35,9 @@ OFFLINE_TOOLS = (
     "open_app", "computer_settings", "system_status", "system_tools",
     "file_controller", "find_files", "window_manager", "media_player",
     "reminder", "recall_memory", "save_memory", "clipboard_history",
-    "macro", "screen_text", "undo", "offline_mode",
+    "macro", "screen_text", "undo", "offline_mode", "saved_info",
 )
-ONLINE_ONLY = ("web search, news, weather, YouTube, flights, sending messages, "
+ONLINE_ONLY = ("web search, live news, weather, YouTube, flights, sending messages, "
                "coding help, reading or understanding the screen with AI")
 DESC_LIMIT = 300
 MAX_TOOL_ROUNDS = 3
@@ -357,7 +357,8 @@ SYSTEM_PROMPT = (
     "sentences, no lists or markdown. Use a tool when the user asks you to do "
     "something on the PC. These need the internet and are unavailable right now: "
     "{online_only}. If asked for one, say briefly that it needs the internet and "
-    "you'll be able to do it when the connection is back."
+    "you'll be able to do it when the connection is back. For news headlines or "
+    "exchange rates use saved_info and say how old the saved data is."
 )
 
 

@@ -46,6 +46,8 @@ def check(cond: bool, label: str) -> None:
 tmp = Path(tempfile.mkdtemp(prefix="habibi_offline_"))
 shutil.copy(ROOT / "plugins" / "offline_mode.py", tmp / "offline_mode.py")
 shutil.copy(ROOT / "plugins" / "_offline_engine.py", tmp / "_offline_engine.py")
+shutil.copy(ROOT / "plugins" / "_offline_setup.py", tmp / "_offline_setup.py")
+shutil.copy(ROOT / "plugins" / "offline_cache.py", tmp / "offline_cache.py")
 (tmp / "half_hook.py").write_text(
     "PLUGIN = {'name': 'half_hook', 'description': 'x', 'parameters': {'type': 'OBJECT'}}\n"
     "def run(parameters): return 'ok'\n"
@@ -247,7 +249,28 @@ check("Mode: Always offline" in rec.run({"action": "status"}), "tool: status rep
 rec.run({"action": "auto"})
 check(om.get_mode() == om.MODE_AUTO, "tool: 'auto' switches back to automatic")
 
-# ── 6. main.py is wired to the hook ─────────────────────────────────────────
+# ── 6. saved info (offline cache) and setup ─────────────────────────────────
+cache_rec = reg._plugins.get("saved_info")
+check(cache_rec is not None and cache_rec.valid, "saved_info loads as a plugin")
+oc = sys.modules["plugins.offline_cache"]
+oc.CACHE_FILE = tmp / "offline_cache.json"
+check("don't have any saved" in cache_rec.run({"kind": "news"}), "saved_info: says when nothing is saved")
+oc.put("rates:USD", {"USD": 1.0, "BDT": 120.0, "SAR": 3.75})
+oc.put("news:top", [{"title": "Rain expected", "source": "BSS"}])
+ans = cache_rec.run({"from_currency": "usd", "to_currency": "bdt", "amount": 100})
+check("12,000.00 BDT" in ans and "saved just now" in ans, "saved_info: converts money and says the age")
+ans = cache_rec.run({"from_currency": "SAR", "to_currency": "BDT"})
+check("32.00 BDT" in ans, "saved_info: converts between two non-dollar currencies")
+check("Rain expected" in cache_rec.run({"kind": "news"}), "saved_info: reads saved headlines")
+check(oc.age_text(time.time() - 3 * 3600) == "saved 3 hours ago", "saved_info: age wording")
+check("saved_info" in eng.OFFLINE_TOOLS, "saved_info is offered to the local model")
+NET["up"] = False
+ok, msg = om._setup_offline({})
+check(not ok and "internet" in msg, "setup button: explains it needs the internet once")
+st = om._load_sibling("_offline_setup")
+check(callable(st.run_setup) and "en" in st.PIPER_VOICES, "setup helper loads")
+
+# ── 7. main.py is wired to the hook ─────────────────────────────────────────
 src = (ROOT / "main.py").read_text(encoding="utf-8")
 check(src.count("voice_takeover") >= 2, "main.py asks plugins before connecting and before backoff")
 check("_run_plugin_voice" in src and "plugin_text_handler" in src, "main.py runs the plugin voice loop")

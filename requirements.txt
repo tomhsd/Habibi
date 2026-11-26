@@ -59,6 +59,12 @@ wmi;        sys_platform == "win32"
 # tools (pactl / brightnessctl / osascript / systemd), so no extra Python
 # packages are needed there — nothing Windows-specific is ever pulled in.
 
+# ── Offline mode: local listening and speaking (plugins/offline_mode.py) ────
+# The local "brain" is Ollama (separate app, https://ollama.com) — the ⚙ SET UP
+# OFFLINE VOICE button installs it and downloads the models.
+faster-whisper
+piper-tts
+
 # ── Voice lock (only obey the owner's voice) ─────────────────────────────────
 sherpa-onnx
 
