@@ -6406,6 +6406,21 @@ class HabibiUI:
     def set_state(self, state: str):
         self._win._state_sig.emit(state)
 
+    def set_link_status(self, text: str, color: str | None = None) -> None:
+        """Thread-safe: set the footer link line (normally "<version>  //  ONLINE").
+        Plugins use it to show a connection badge such as OFFLINE · LOCAL.
+        Empty text restores the default line."""
+        def _apply():
+            lbl = getattr(self._win, "_link_lbl", None)
+            if lbl is None:
+                return
+            lbl.setText(f"{APP_VERSION}  //  {text}" if text else f"{APP_VERSION}  //  ONLINE")
+            lbl.setStyleSheet(f"color: {color or C.PRI_DIM}; background: transparent;")
+        try:
+            self.run_in_ui(_apply, timeout=5)
+        except Exception:
+            pass
+
     def set_mood(self, key: str, label: str, color: str) -> None:
         """Thread-safe: show Habibi's current feeling on the reactor."""
         hud = getattr(self._win, "hud", None)
