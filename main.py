@@ -495,6 +495,14 @@ class HabibiLive:
 
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
 
+        # ── Plugin voice takeover (offline mode) ─────────────────────────
+        # Before each Gemini connect a plugin may take over the voice loop
+        # (PluginRegistry.voice_takeover). While it runs, typed commands go to
+        # plugin_text_handler, which the plugin sets for its session.
+        self._plugin_voice      = None    # PluginRecord running the voice loop, or None
+        self._net_failures      = 0       # Gemini connects in a row lost to network errors
+        self.plugin_text_handler = None   # callable(text) set by the active voice plugin
+
         _base_dir = Path(__file__).resolve().parent
         _inline_names = {t["name"] for t in TOOL_DECLARATIONS}
 
@@ -836,6 +844,11 @@ class HabibiLive:
             _persona.mark_talk()
         except Exception:
             pass
+        handler = self.plugin_text_handler
+        if self._plugin_voice is not None and callable(handler):
+            threading.Thread(target=self._safe_plugin_text, args=(handler, text),
+                             daemon=True).start()
+            return
         if not self._loop or not self.session:
             return
         # Respect wake-word sleep: a typed command must not be answered while
@@ -851,6 +864,50 @@ class HabibiLive:
             ),
             self._loop
         )
+
+    def _safe_plugin_text(self, handler, text: str) -> None:
+        try:
+            handler(text)
+        except Exception as e:
+            self.ui.write_log(f"ERR: {e}")
+            traceback.print_exc()
+
+    # ── Services for a plugin that runs the voice loop (offline mode) ───────
+    def tool_declarations(self) -> list[dict]:
+        """Every tool Habibi offers right now: inline, actions and enabled plugins."""
+        return (TOOL_DECLARATIONS
+                + self._action_registry.get_tool_declarations()
+                + self._plugin_registry.get_tool_declarations())
+
+    async def run_tool(self, name: str, args: dict | None = None) -> str:
+        """Run one tool exactly as a Gemini tool call would (same safety, logs
+        and undo), and return its result text."""
+        import uuid
+        fc = types.FunctionCall(id=uuid.uuid4().hex, name=name, args=dict(args or {}))
+        resp = await self._execute_tool(fc)
+        out = (resp.response or {}).get("result", "")
+        return str(out)
+
+    async def _run_plugin_voice(self, rec) -> None:
+        """Let a plugin run the voice loop until it returns (it hands back when
+        Gemini is reachable again or the user switches mode)."""
+        self.session = None
+        self._plugin_voice = rec
+        print(f"[HABIBI] Voice loop handed to plugin '{rec.name}'.")
+        try:
+            await rec.voice_session(self)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[HABIBI] Plugin '{rec.name}' voice_session crashed: {e}")
+            traceback.print_exc()
+            self.ui.write_log(f"ERR: {rec.name} stopped: {e}")
+            await asyncio.sleep(3)      # never spin if a plugin keeps crashing
+        finally:
+            self._plugin_voice = None
+            self.plugin_text_handler = None
+            self.set_speaking(False)
+        print(f"[HABIBI] Plugin '{rec.name}' handed the voice loop back.")
 
     def set_speaking(self, value: bool):
         with self._speaking_lock:
@@ -1849,6 +1906,13 @@ class HabibiLive:
         asyncio.create_task(self._start_dashboard())
 
         while True:
+            taker = await asyncio.to_thread(
+                self._plugin_registry.voice_takeover, self, self._net_failures)
+            if taker is not None:
+                await self._run_plugin_voice(taker)
+                self._net_failures = 0
+                self._conn_backoff = 0
+                continue
             try:
                 print("[HABIBI] Connecting...")
                 self.ui.set_state("THINKING")
@@ -1881,6 +1945,7 @@ class HabibiLive:
                     self._interrupted          = False
 
                     print("[HABIBI] Connected.")
+                    self._net_failures = 0
                     if _resumed_with:
                         # Say it plainly: the difference between "it reconnected"
                         # and "it reconnected and still knows what we were doing"
@@ -1996,6 +2061,7 @@ class HabibiLive:
                     "ConnectionRefusedError", "OSError", "Cannot connect",
                 ))
                 if is_net_err:
+                    self._net_failures += 1
                     _conn_backoff = min(getattr(self, "_conn_backoff", 3) * 2, 60)
                     self._conn_backoff = _conn_backoff
                     self.ui.write_log(
@@ -2017,6 +2083,9 @@ class HabibiLive:
                 await self._dashboard.broadcast({"type": "status", "state": "sleeping"})
 
             delay = getattr(self, "_conn_backoff", 3)
+            if self._net_failures and await asyncio.to_thread(
+                    self._plugin_registry.voice_takeover, self, self._net_failures):
+                continue    # a plugin (offline mode) takes over now — no backoff wait
             print(f"[HABIBI] Reconnecting in {delay}s...")
             await asyncio.sleep(delay)
 

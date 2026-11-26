@@ -35,6 +35,9 @@ class PluginRecord:
     error: str = ""
     settings: Optional[dict] = None   # optional PLUGIN_SETTINGS schema (config fields)
     ui_setup: Optional[Callable] = None   # optional setup_ui(player): runs once on the Qt thread
+    # optional voice takeover (e.g. offline mode): see PluginRegistry.voice_takeover
+    voice_wants: Optional[Callable] = None     # voice_takeover(host, failures) -> bool
+    voice_session: Optional[Callable] = None   # async voice_session(host): runs until it hands back
     mtime: float = 0.0
 
 
@@ -206,6 +209,28 @@ class PluginRegistry:
                 self._logger(f"Plugin '{name}' setup_ui failed: {e}")
                 traceback.print_exc()
 
+    # -- called by main.py before each Gemini connect: optional voice takeover --
+    def voice_takeover(self, host, failures: int = 0) -> Optional[PluginRecord]:
+        """Ask enabled plugins that declare BOTH voice_takeover(host, failures) and
+        async voice_session(host) whether they want to run the voice loop instead
+        of Gemini Live (offline mode is the first user). `failures` is how many
+        Gemini connects in a row have failed with a network error. Returns the
+        first plugin that says yes, else None. Runs off the event loop (main.py
+        calls it through asyncio.to_thread), so a plugin may do a quick network
+        check here. Never raises."""
+        for name, rec in self._plugins.items():
+            if rec.voice_wants is None or rec.voice_session is None:
+                continue
+            if not get_plugin_enabled(name):
+                continue
+            try:
+                if rec.voice_wants(host, failures):
+                    return rec
+            except Exception as e:
+                self._logger(f"Plugin '{name}' voice_takeover failed: {e}")
+                traceback.print_exc()
+        return None
+
     # -- called by ui.py's settings tab to render per-plugin config forms --
     def settings_schemas(self) -> list[dict]:
         """One entry per settings SECTION, for enabled plugins that declare a
@@ -298,9 +323,15 @@ def _validate(module, filename: str) -> PluginRecord:
     if not callable(ui_setup):
         ui_setup = None
 
+    # Optional voice takeover: both halves are needed, and the session must be async.
+    voice_wants = getattr(module, "voice_takeover", None)
+    voice_session = getattr(module, "voice_session", None)
+    if not (callable(voice_wants) and inspect.iscoroutinefunction(voice_session)):
+        voice_wants = voice_session = None
+
     return PluginRecord(name=name, description=description.strip(), parameters=parameters,
                          run=run_fn, file=filename, valid=True, error="", settings=settings,
-                         ui_setup=ui_setup)
+                         ui_setup=ui_setup, voice_wants=voice_wants, voice_session=voice_session)
 
 
 def _load_file(path: Path, core_tool_names: set[str], valid: dict) -> PluginRecord:
