@@ -22,7 +22,7 @@ from pathlib import Path
 _DEPS_OK = False
 try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-    from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
     import uvicorn
     _DEPS_OK = True
 except ImportError:
@@ -545,7 +545,27 @@ class DashboardServer:
         self._uploads_dir                 = UPLOADS_DIR
         self._login_html                  = _read("login.html")
         self._app_html                    = _read("app.html")
+        self._phone_scripts: dict[str, str] = {}   # plugin name → JS for the phone remote
         self.app                          = self._build_app()
+
+    # ── plugin hooks (see PluginRegistry.dashboard_setup) ─────────────────
+
+    def is_authorized(self, req) -> bool:
+        """True when a request carries a logged-in phone's bearer token."""
+        tok = req.headers.get("authorization", "").removeprefix("Bearer ").strip()
+        return bool(tok) and tok in self._tokens
+
+    def add_phone_script(self, name: str, js: str) -> None:
+        """JavaScript a plugin adds to the phone remote page (served at /plugins.js)."""
+        self._phone_scripts[str(name)] = js
+
+    async def send_command(self, text: str) -> None:
+        """Queue a command exactly as if it was typed on the phone."""
+        text = (text or "").strip()
+        if text:
+            await self._command_queue.put(text)
+            if self._wake_callback:
+                self._wake_callback()
 
     # ── one-time key management ───────────────────────────────────────────
 
@@ -722,10 +742,13 @@ class DashboardServer:
 
     # ── broadcast ────────────────────────────────────────────────────────
 
+    _LIVE_ONLY = ("heard", "voice_state")   # live captions: not replayed on reconnect
+
     async def broadcast(self, msg: dict) -> None:
-        self._history.append(msg)
-        if len(self._history) > 300:
-            self._history = self._history[-300:]
+        if msg.get("type") not in self._LIVE_ONLY:
+            self._history.append(msg)
+            if len(self._history) > 300:
+                self._history = self._history[-300:]
         dead: set[WebSocket] = set()
         for ws in list(self._clients):
             try:
@@ -740,8 +763,18 @@ class DashboardServer:
         app = FastAPI(docs_url=None, redoc_url=None)
 
         def _auth(req: Request) -> bool:
-            tok = req.headers.get("authorization", "").removeprefix("Bearer ").strip()
-            return bool(tok) and tok in self._tokens
+            return self.is_authorized(req)
+
+        @app.get("/plugins.js")
+        async def plugin_scripts():
+            # Plugin add-ons for the phone page; each runs on its own so one
+            # broken plugin can't stop the others (or the page).
+            parts = []
+            for name, js in self._phone_scripts.items():
+                parts.append(f"// ── plugin: {name}\ntry {{\n{js}\n}} catch (e) {{ console.error('plugin {name}', e); }}\n")
+            return Response("\n".join(parts) or "// no plugin scripts\n",
+                            media_type="application/javascript",
+                            headers={"Cache-Control": "no-store"})
 
         # serve CryptoJS from local cache, fallback to CDN redirect
         @app.get("/static/crypto.js")

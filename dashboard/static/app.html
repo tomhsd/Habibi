@@ -462,6 +462,7 @@
     const wake  = document.getElementById('wake');
     const sideLink = document.getElementById('sideLink');
 
+    window.habibiHooks = window.habibiHooks || { message: [] };   // plugins.js adds to these
     const _wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
     const _wsUrl   = `${_wsProto}://${location.host}/ws?token=${encodeURIComponent(_authToken)}`;
     const ws       = new WebSocket(_wsUrl);
@@ -481,6 +482,7 @@
       if (m.type === 'sys')           sys(m.text);
       if (m.type === 'file_received') _onFileReceived(m);
       if (m.type === 'mood')          setMood(m);
+      for (const f of window.habibiHooks.message) { try { f(m); } catch (_) {} }   // plugin add-ons
     };
 
     function setMood(m) {
@@ -726,18 +728,48 @@
     setInterval(() => {
       document.getElementById('stopBtn').classList.toggle('show', _speakingNow());
     }, 200);
-    let _bargeMs = 0, _bargeHeld = [];
+    // Talk-over detection that ignores HABIBI's own voice. When the phone
+    // speaker plays HABIBI, the phone mic hears it too; a plain loudness check
+    // took that echo for the user and stopped HABIBI mid-sentence ("Interrupted
+    // — listening…"). So the mic level is compared with what the speaker is
+    // playing right now: the echo gain is learned while HABIBI talks, and only
+    // sound clearly louder than the expected echo, for long enough, counts.
+    const _echo = { gain: 1.0, ms: 0, tailUntil: 0, held: [] };
+    function _echoBargeStep(st, micRms, spkRms, ms, now) {   // pure: testable
+      // spkRms = loudest HABIBI sound of the last ~250 ms (covers mic delay)
+      const expected = st.gain * spkRms;
+      const thr = Math.max(0.05, expected * 1.8 + 0.03);
+      const loud = micRms > thr;
+      if (spkRms > 0.01) {                                   // learn the echo gain (slowly while loud)
+        const g = Math.min(4, micRms / spkRms), a = loud ? 0.004 : 0.03;
+        st.gain = st.gain * (1 - a) + g * a;
+      }
+      st.ms = loud ? st.ms + ms : Math.max(0, st.ms - ms * 0.5);
+      return st.ms >= (spkRms > 0.01 ? 400 : 280);
+    }
+    function _spkRecentMax() {     // loudest HABIBI chunk heard in the last 250 ms
+      if (!_spkCtx || !lv.spkQ.length) return 0;
+      const t = _spkCtx.currentTime; let mx = 0;
+      for (const e of lv.spkQ) if (e.t0 <= t && e.t1 >= t - 0.25) mx = Math.max(mx, e.rms);
+      return mx;
+    }
     function _phoneBarge(f32, rate) {        // gate=true → don't send (HABIBI is talking)
-      if (!_speakingNow()) { _bargeMs = 0; _bargeHeld = []; return { gate: false }; }
-      const ms = f32.length / rate * 1000, r = _rms(f32);
-      _bargeHeld.push([ms, new Int16Array(_f32toPcm16(f32, rate))]);
-      let tot = _bargeHeld.reduce((a, x) => a + x[0], 0);
-      while (tot > 800 && _bargeHeld.length > 1) tot -= _bargeHeld.shift()[0];
-      _bargeMs = r > 0.05 ? _bargeMs + ms : Math.max(0, _bargeMs - ms);
-      if (_bargeMs >= 280 && localStorage.getItem('habibi_barge') !== 'off') {
-        const held = _bargeHeld.map(x => x[1]);
-        _bargeMs = 0; _bargeHeld = [];
+      const now = performance.now();
+      if (_speakingNow()) _echo.tailUntil = now + 400;          // room echo lingers a moment
+      if (!_speakingNow()) {
+        _echo.ms = 0; _echo.held = [];
+        return { gate: now < _echo.tailUntil };              // don't send the echo tail as a command
+      }
+      const ms = f32.length / rate * 1000;
+      const spk = _spkOn ? _spkRecentMax() : 0;
+      _echo.held.push([ms, new Int16Array(_f32toPcm16(f32, rate))]);
+      let tot = _echo.held.reduce((a, x) => a + x[0], 0);
+      while (tot > 800 && _echo.held.length > 1) tot -= _echo.held.shift()[0];
+      if (_echoBargeStep(_echo, _rms(f32), spk, ms, now) && localStorage.getItem('habibi_barge') !== 'off') {
+        const held = _echo.held.map(x => x[1]);
+        _echo.ms = 0; _echo.held = []; _echo.tailUntil = 0;
         doStop(); sys('You spoke — HABIBI stopped.');
+        for (const f of (window.habibiHooks.bargeIn || [])) { try { f(); } catch (_) {} }
         return { gate: false, held };
       }
       return { gate: true };
@@ -925,5 +957,6 @@
     }
     if (_voiceWant) setTimeout(_startVoice, 600);
   </script>
+  <script src="/plugins.js"></script>
 </body>
 </html>

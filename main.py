@@ -137,6 +137,7 @@ LIVE_MODEL          = "models/gemini-3.1-flash-live-preview"
 CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000 
 RECEIVE_SAMPLE_RATE = 24000
+ECHO_TAIL_S         = 0.45   # mic closed this long after Habibi stops talking
 CHUNK_SIZE          = 1024
 
 # RMS below which 16-bit PCM is treated as room silence; above _LEVEL_FULL it
@@ -480,6 +481,7 @@ class HabibiLive:
         self._vision_last_time     = 0.0     # monotonic time of last screen_process call (cooldown guard)
         self._vision_busy          = False   # True while a vision capture/inject cycle is in flight
         self._interrupted          = False   # True while draining audio after user interrupt
+        self._echo_tail_until      = 0.0     # mic stays closed until then (end of Habibi's voice)
         self.ui.on_text_command   = self._on_text_command
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
@@ -786,6 +788,8 @@ class HabibiLive:
             self._dashboard.set_connect_callback(self._on_phone_connected)
             self._dashboard.set_alert_callback(lambda m: self.ui.write_log(f"ERR: {m}"))
             self._dashboard.set_interrupt_callback(self._phone_interrupt)
+            # Plugins may add phone routes and phone-page add-ons (before serving).
+            self._plugin_registry.dashboard_setup(self._dashboard, self)
             asyncio.create_task(self._run_dashboard())
             # Runs for the whole lifetime, not just inside an active session
             asyncio.create_task(self._process_dashboard_commands())
@@ -950,6 +954,11 @@ class HabibiLive:
 
     def set_speaking(self, value: bool):
         with self._speaking_lock:
+            if self._is_speaking and not value:
+                # The sound card is still playing the last words and the room
+                # still echoes them: keep the mic closed a moment longer so
+                # Habibi never hears the end of its own answer as a question.
+                self._echo_tail_until = time.monotonic() + ECHO_TAIL_S
             self._is_speaking = value
         if not value:
             self._barge.reset()
@@ -995,9 +1004,16 @@ class HabibiLive:
             if drained:
                 print(f"[HABIBI] ✋ Interrupted — {drained} audio chunks discarded")
         self.set_speaking(False)
+        self._echo_tail_until = 0.0     # the user is talking now: listen at once
         if self._turn_done_event:
             self._turn_done_event.clear()
         self.ui.write_log("SYS: Interrupted — listening...")
+        if self._dashboard and self._loop:
+            try:
+                asyncio.run_coroutine_threadsafe(self._dashboard.broadcast(
+                    {"type": "voice_state", "state": "interrupted"}), self._loop)
+            except Exception:
+                pass
 
     def speak(self, text: str):
         if not self._loop or not self.session:
@@ -1324,6 +1340,9 @@ class HabibiLive:
                 return
             with self._speaking_lock:
                 habibi_speaking = self._is_speaking
+            if not habibi_speaking and time.monotonic() < self._echo_tail_until:
+                mic_stat["speaking"] += 1      # echo tail of Habibi's last words
+                return
             # ✋ Barge-in: while Habibi talks, the mic still isn't sent to the AI,
             # but if the user clearly talks over it, Habibi stops and listens.
             if (habibi_speaking and not self.ui.muted and not self._phone_active
@@ -1460,6 +1479,17 @@ class HabibiLive:
                             if txt:
                                 in_buf.append(txt)
                                 self._last_user_speech = time.monotonic()
+                                if self._dashboard:        # live words on the phone
+                                    asyncio.create_task(self._dashboard.broadcast({
+                                        "type": "heard", "text": " ".join(in_buf).strip(),
+                                    }))
+
+                        # Gemini stopped its old answer because the user spoke:
+                        # what comes next is the answer to the new words, so it
+                        # must not be thrown away as part of the interrupted turn.
+                        if getattr(sc, "interrupted", False):
+                            self._interrupted = False
+                            out_buf = []
 
                         if sc.turn_complete:
                             if self._turn_done_event:
@@ -1468,8 +1498,9 @@ class HabibiLive:
                             # If this turn_complete ends an interrupted response, clear the
                             # flag and skip all further processing for that turn.
                             if self._interrupted:
+                                # Drop the cut-off answer, but keep what the user
+                                # said over it: those words are the next command.
                                 self._interrupted = False
-                                in_buf  = []
                                 out_buf = []
                                 continue
 
@@ -1915,6 +1946,13 @@ class HabibiLive:
                 )
                 if not text:
                     continue
+                # A plugin runs the voice loop (offline mode): it answers instead
+                # of Gemini, and its answer is sent back to the phone too.
+                handler = self.plugin_text_handler
+                if self._plugin_voice is not None and callable(handler):
+                    self.ui.write_log(f"[Web]: {text}")
+                    asyncio.create_task(self._plugin_answer_phone(handler, text))
+                    continue
                 # Wait up to 8s for session to become ready after a wake
                 for _ in range(80):
                     if self.session:
@@ -1937,6 +1975,18 @@ class HabibiLive:
             except Exception as e:
                 print(f"[Dashboard] Command error: {e}")
                 await asyncio.sleep(0.5)
+
+    async def _plugin_answer_phone(self, handler, text: str) -> None:
+        try:
+            answer = await asyncio.to_thread(handler, text)
+        except Exception as e:
+            self.ui.write_log(f"ERR: {e}")
+            return
+        if isinstance(answer, str) and answer.strip() and self._dashboard:
+            await self._dashboard.broadcast({
+                "type": "log", "speaker": "habibi", "text": answer.strip(),
+                "ts": datetime.now().isoformat(),
+            })
 
     # ── main loop ───────────────────────────────────────────────────────────
 
