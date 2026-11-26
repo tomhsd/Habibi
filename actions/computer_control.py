@@ -557,7 +557,11 @@ def computer_control(
     try:
 
         if action == "type":
-            return _type(params.get("text", ""))
+            r = _type(params.get("text", ""))
+            if params.get("enter") and r.startswith("Typed"):
+                time.sleep(0.1)
+                r += " | " + _press("enter")
+            return r
 
         if action == "smart_type":
             return _smart_type(
@@ -721,6 +725,10 @@ TOOL = {
             "field": {
                 "type": "STRING",
                 "description": "Field for user_data: name|email|city"
+            },
+            "enter": {
+                "type": "BOOLEAN",
+                "description": "type: press Enter after the text (use when the user says send/submit/enter)"
             },
             "clear_first": {
                 "type": "BOOLEAN",

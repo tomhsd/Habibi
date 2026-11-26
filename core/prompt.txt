@@ -42,6 +42,8 @@ PRECISE COMPUTER CONTROL (see → act → check):
    When the user names an app, ALWAYS pass it to the tool (ui_control window=…, computer_control
    window=…) so text never lands in another app. If no app is named, it goes to the app the user
    was last using; if you are not sure which app they mean, ask.
+   "…and press Enter" / "send it" / "submit" → type with enter=true, or ui_control press keys=enter
+   in that window. Never say Enter was pressed unless the tool result says so.
 2. Act with the most exact tool:
    - Office documents → office (Excel/Word/PowerPoint directly, no clicking).
    - Buttons, menus, fields in desktop apps → ui_control (click/type by NAME; list_elements if unsure).

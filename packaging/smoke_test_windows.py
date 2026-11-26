@@ -154,6 +154,21 @@ time.sleep(0.4)
 run("computer_control", action="press", window="notepad", key="esc")
 _decoy.kill()
 
+# Enter and other keys go to the named app; Enter really pressed
+run("ui_control", action="type", window="notepad", text="ENTER-A", clear=True)
+check("ui_control press enter in Notepad", lambda: ("Pressed enter" in (r := run("ui_control", action="press", window="notepad", keys="enter")), r))
+check("ui_control type with enter=true reports Enter",
+      lambda: ("pressed Enter" in (r := run("ui_control", action="type", window="notepad", text="ENTER-B", enter=True)), r))
+time.sleep(0.4)
+def _enter_ok():
+    v = run("ui_control", action="read", window="Notepad")
+    i, j = v.find("ENTER-A"), v.find("ENTER-B")
+    return (i >= 0 and j > i and ("\n" in v[i:j] or "\r" in v[i:j])), repr(v[-200:])
+check("…Enter made new lines", _enter_ok)
+_st = sys.modules.get("plugins.screen_text")
+check("OCR slips still match ('Sumbit' finds 'Submit')", lambda: (bool(_st.find_text(
+      [{"text": "Sumbit", "line": 0, "x": 10, "y": 10, "w": 40, "h": 12}], "Submit")), "ok"))
+
 # plugin manager: install / reload / remove with no restart (temp folder, not the real one)
 import tempfile  # noqa: E402
 _pd = Path(tempfile.mkdtemp()); _src = Path(tempfile.mkdtemp())
