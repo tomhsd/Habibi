@@ -47,7 +47,7 @@ def python_hint() -> str:
     if venv.exists():
         return ("Close Habibi and start it with 'Start Habibi (offline-ready).bat' — "
                 "that copy uses Python 3.12 and already has the offline voice installed.")
-    return ("Install Python 3.12 and run Habibi with it, or use HabibiSetup.exe, "
+    return ("Install Python 3.12 and run Habibi with it, or use HabibiOfflineSetup.exe, "
             "which already includes the offline voice.")
 
 

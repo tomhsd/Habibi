@@ -1,8 +1,11 @@
 # ⚙️ HABIBI
 
 > **Downloads** — go to **[Releases → Latest build](../../releases/tag/latest)**:
-> - **HabibiSetup.exe** — Windows installer (no Python needed)
-> - **Habibi-Windows-portable.zip** — the same app without installing
+> - **HabibiOnlineSetup.exe** — Habibi Online: the Gemini Live assistant (needs internet). Smaller download.
+> - **HabibiOfflineSetup.exe** — Habibi Offline: everything in Online, plus offline mode, so Habibi keeps listening, thinking and speaking on your PC when the internet is down.
+> - **Habibi-Online-Windows-portable.zip** / **Habibi-Offline-Windows-portable.zip** — the same apps without installing
+>
+> The two editions are separate apps: install just one, or both (they go to different folders and keep their own settings). No Python needed. Each user enters their own Gemini API key on first start.
 > - **Habibi.apk** — Android phone app (remote with live voice + phone control)
 >
 > Builds run automatically on every push (see the **Actions** tab).
