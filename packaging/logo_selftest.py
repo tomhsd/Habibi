@@ -5,7 +5,7 @@
   • the real MainWindow (offscreen): ⚙ buttons, window + app icon, header
     logo swapped, CREATE DESKTOP SHORTCUT uses the custom icon, reset works
   • Windows: real .lnk shortcuts (desktop, Start menu, taskbar pin) get the
-    icon, through pywin32 and through the no-pywin32 VBScript path; other
+    icon, through pywin32 and through the no-pywin32 PowerShell path; other
     apps' shortcuts are left alone; reset puts Habibi.exe's icon back
   • Linux: .desktop files get Icon=
 Saves logo_selftest.png (the header with a custom logo)."""
@@ -240,7 +240,7 @@ if sys.platform == "win32":
         return sh.CreateShortCut(str(p)).IconLocation
 
     for use_com in (True, False):
-        label = "pywin32" if use_com else "VBScript (no pywin32)"
+        label = "pywin32" if use_com else "PowerShell (no pywin32)"
         res = L.sync_shortcuts(str(ico), dirs=scan, exe=fake_exe, script="", use_com=use_com)
         check(f"{label}: found desktop, Start menu and pinned shortcut", len(res["found"]) == 3, str(res))
         check(f"{label}: all three changed", len(res["changed"]) == 3, str(res["failed"]))

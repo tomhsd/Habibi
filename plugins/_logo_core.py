@@ -186,7 +186,7 @@ def sync_shortcuts(icon_loc: str, dirs=None, exe: str | None = None,
             except Exception as e:
                 res["failed"].append(f"COM: {e}")
         if not done:
-            _sync_vbs(files, icon_loc, exe, script or "", res)
+            _sync_ps(files, icon_loc, exe, script or "", res)
     else:
         _sync_linux(icon_loc, dirs, res)
     return res
@@ -202,7 +202,7 @@ def _icon_matches(current: str, wanted: str) -> bool:
 
 
 def _sync_com(files, icon_loc, exe, script, res) -> None:
-    from win32com.client import Dispatch  # type: ignore   (ImportError -> VBS path)
+    from win32com.client import Dispatch  # type: ignore   (ImportError -> PowerShell path)
     sh = Dispatch("WScript.Shell")
     for f in files:
         try:
@@ -219,67 +219,48 @@ def _sync_com(files, icon_loc, exe, script, res) -> None:
             res["failed"].append(f"{f}: {e}")
 
 
-_VBS = r'''
-Set ws = CreateObject("WScript.Shell")
-Set fso = CreateObject("Scripting.FileSystemObject")
-Set inp = fso.OpenTextFile(WScript.Arguments(0), 1, False, -1)
-Set outp = fso.CreateTextFile(WScript.Arguments(1), True, True)
-Do Until inp.AtEndOfStream
-  p = inp.ReadLine
-  If Len(p) > 0 Then
-    On Error Resume Next
-    Set sc = ws.CreateShortcut(p)
-    If Err.Number = 0 Then
-      outp.WriteLine "L" & vbTab & p & vbTab & sc.TargetPath & vbTab & sc.Arguments & vbTab & sc.IconLocation
-    Else
-      outp.WriteLine "E" & vbTab & p & vbTab & Err.Description
-    End If
-    Err.Clear
-    On Error GoTo 0
-  End If
-Loop
-outp.Close
+# Fallback without pywin32: PowerShell + the same WScript.Shell COM object.
+# (VBScript is being removed from Windows, so it isn't used.) CREATE_NO_WINDOW
+# keeps it invisible. Paths travel through UTF-16 files so any name works.
+_PS_READ = r'''
+param($inp, $out)
+$ws = New-Object -ComObject WScript.Shell
+$lines = Get-Content -LiteralPath $inp -Encoding Unicode
+$res = foreach ($p in $lines) {
+  if (-not $p) { continue }
+  try { $sc = $ws.CreateShortcut($p)
+        "L`t$p`t$($sc.TargetPath)`t$($sc.Arguments)`t$($sc.IconLocation)" }
+  catch { "E`t$p`t$($_.Exception.Message)" }
+}
+Set-Content -LiteralPath $out -Value $res -Encoding Unicode
 '''
 
-_VBS_SET = r'''
-Set ws = CreateObject("WScript.Shell")
-Set fso = CreateObject("Scripting.FileSystemObject")
-Set inp = fso.OpenTextFile(WScript.Arguments(0), 1, False, -1)
-Set outp = fso.CreateTextFile(WScript.Arguments(1), True, True)
-icon = inp.ReadLine
-Do Until inp.AtEndOfStream
-  p = inp.ReadLine
-  If Len(p) > 0 Then
-    On Error Resume Next
-    Set sc = ws.CreateShortcut(p)
-    sc.IconLocation = icon
-    sc.Save
-    If Err.Number = 0 Then
-      outp.WriteLine "OK" & vbTab & p
-    Else
-      outp.WriteLine "E" & vbTab & p & vbTab & Err.Description
-    End If
-    Err.Clear
-    On Error GoTo 0
-  End If
-Loop
-outp.Close
+_PS_SET = r'''
+param($inp, $out)
+$ws = New-Object -ComObject WScript.Shell
+$lines = @(Get-Content -LiteralPath $inp -Encoding Unicode)
+$icon = $lines[0]
+$res = foreach ($p in ($lines | Select-Object -Skip 1)) {
+  if (-not $p) { continue }
+  try { $sc = $ws.CreateShortcut($p); $sc.IconLocation = $icon; $sc.Save(); "OK`t$p" }
+  catch { "E`t$p`t$($_.Exception.Message)" }
+}
+Set-Content -LiteralPath $out -Value $res -Encoding Unicode
 '''
 
 
-def _run_vbs(code: str, lines: list[str]) -> list[str]:
-    """Run a VBScript with wscript.exe (GUI host: never opens a console).
-    Input/output go through UTF-16 files so any path works."""
+def _run_ps(code: str, lines: list[str]) -> list[str]:
     tmp = Path(tempfile.mkdtemp(prefix="habibi_logo_"))
     try:
-        vbs, inp, out = tmp / "s.vbs", tmp / "in.txt", tmp / "out.txt"
-        vbs.write_text(code, encoding="utf-8")
+        ps1, inp, out = tmp / "s.ps1", tmp / "in.txt", tmp / "out.txt"
+        ps1.write_text(code, encoding="utf-8-sig")
         inp.write_text("\r\n".join(lines) + "\r\n", encoding="utf-16")
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.run(["wscript.exe", "//nologo", "//B", str(vbs), str(inp), str(out)],
-                       timeout=60, creationflags=flags)
+        r = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                            "-File", str(ps1), str(inp), str(out)],
+                           capture_output=True, text=True, timeout=90, creationflags=flags)
         if not out.exists():
-            return []
+            raise RuntimeError((r.stderr or r.stdout or "no output").strip()[:300])
         return out.read_text(encoding="utf-16").splitlines()
     finally:
         for p in tmp.glob("*"):
@@ -293,9 +274,14 @@ def _run_vbs(code: str, lines: list[str]) -> list[str]:
             pass
 
 
-def _sync_vbs(files, icon_loc, exe, script, res) -> None:
+def _sync_ps(files, icon_loc, exe, script, res) -> None:
     todo = []
-    for line in _run_vbs(_VBS, [str(f) for f in files]):
+    try:
+        listing = _run_ps(_PS_READ, [str(f) for f in files])
+    except Exception as e:
+        res["failed"].append(f"PowerShell: {e}")
+        return
+    for line in listing:
         parts = line.split("\t")
         if parts[0] == "L" and len(parts) >= 5:
             _, p, target, args, cur = parts[:5]
@@ -305,7 +291,12 @@ def _sync_vbs(files, icon_loc, exe, script, res) -> None:
                     todo.append(p)
     if not todo:
         return
-    for line in _run_vbs(_VBS_SET, [icon_loc] + todo):
+    try:
+        done = _run_ps(_PS_SET, [icon_loc] + todo)
+    except Exception as e:
+        res["failed"].append(f"PowerShell: {e}")
+        return
+    for line in done:
         parts = line.split("\t")
         if parts[0] == "OK":
             res["changed"].append(parts[1])
