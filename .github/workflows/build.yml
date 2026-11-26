@@ -59,6 +59,10 @@ jobs:
         continue-on-error: true
         run: python packaging/youtube_selftest.py
 
+      - name: Draw on the screen test (real mouse + keyboard)
+        continue-on-error: true
+        run: python packaging/draw_selftest.py
+
       - name: Upload test screenshots
         if: always()
         uses: actions/upload-artifact@v4

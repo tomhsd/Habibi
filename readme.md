@@ -244,6 +244,7 @@ HABIBI LIII/
 ├── setup.py                  # OS-aware installer (skips wrong-OS dependencies)
 ├── plugins/
 │   ├── _template.py          # Copy this to write a new plugin — one file, drop in, done
+│   ├── screen_draw.py        # Draw / sketch on top of the screen ("start drawing", Ctrl+Alt+D)
 │   └── ...                   # Drop-in skills (each self-describes via a PLUGIN dict + run())
 ├── actions/                  # Bundled skills — each self-describes via a TOOL dict + handler
 │   ├── web_search.py         # Gemini + DDG parallel search (news, research, price, compare)
