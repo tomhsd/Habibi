@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
 from core.plugin_loader import discover_plugins  # noqa: E402
 
 app = QApplication(sys.argv)
+app.setQuitOnLastWindowClosed(False)   # the drawing layer is a tool window
 results: list[tuple[str, bool, str]] = []
 
 
@@ -166,10 +167,14 @@ def strokes():
     return ui(lambda: ctl().canvas.ink_strokes())
 
 
+finished = {"ok": False}
+
+
 def script():
     time.sleep(0.8)
     try:
         _script()
+        finished["ok"] = True
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -392,6 +397,8 @@ def _script():
 threading.Thread(target=script, daemon=True).start()
 QTimer.singleShot(240_000, app.quit)
 app.exec()
+if not finished["ok"]:
+    check("test ran to the end", False, "stopped early")
 fails = [r for r in results if not r[1]]
 print(f"\n{len(results) - len(fails)}/{len(results)} passed")
 sys.exit(1 if fails or not results else 0)
