@@ -40,6 +40,28 @@ if _platform.system() == "Windows":
 # locale. `errors="replace"` is the belt and braces — a console that genuinely
 # cannot render a glyph shows a box instead of killing the process.
 import sys as _sys
+
+# Started with pythonw (the .bat, auto-start) there is no console: print() goes
+# nowhere and a problem leaves no trace. Write it to logs/habibi.log instead
+# (the last run only, so it never grows).
+if _sys.stdout is None or _sys.stderr is None:
+    try:
+        import os as _os
+        _log_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "logs")
+        _os.makedirs(_log_dir, exist_ok=True)
+        _logf = open(_os.path.join(_log_dir, "habibi.log"), "w", encoding="utf-8",
+                     errors="replace", buffering=1)
+        _sys.stdout = _sys.stdout or _logf
+        _sys.stderr = _sys.stderr or _logf
+    except Exception:
+        pass
+
+# sounddevice sets array.shape on every mic block; NumPy 2.5 warns about that
+# each time, which floods the log. Harmless — hide it.
+import warnings as _warnings
+_warnings.filterwarnings("ignore", message="Setting the shape on a NumPy array",
+                         category=DeprecationWarning)
+
 for _stream in (_sys.stdout, _sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")
@@ -1277,7 +1299,15 @@ class HabibiLive:
         print("[HABIBI] 🎤 Mic started")
         loop = asyncio.get_event_loop()
 
+        # Where the mic audio goes, counted per block and printed every 10 s,
+        # so "Habibi doesn't hear me" can be read straight from the log.
+        mic_stat = {"asleep": 0, "speaking": 0, "muted": 0, "phone": 0, "sent": 0, "peak": 0}
+
         def callback(indata, frames, time_info, status):
+            try:
+                mic_stat["peak"] = max(mic_stat["peak"], int(abs(indata).max()))
+            except Exception:
+                pass
             # ── Wake-word gate ───────────────────────────────────────────────
             # While asleep, the mic audio NEVER goes to Gemini (nothing is
             # streamed, so HABIBI can't respond to speech not addressed to it and
@@ -1290,6 +1320,7 @@ class HabibiLive:
                 if det is not None:
                     det.feed(indata)
                 self.feed_sleep_listeners(indata)
+                mic_stat["asleep"] += 1
                 return
             with self._speaking_lock:
                 habibi_speaking = self._is_speaking
@@ -1302,8 +1333,16 @@ class HabibiLive:
                         loop.call_soon_threadsafe(self._on_barge_in)
                 except Exception:
                     pass
+                mic_stat["speaking"] += 1
                 return
+            if habibi_speaking:
+                mic_stat["speaking"] += 1
+            elif self.ui.muted:
+                mic_stat["muted"] += 1
+            elif self._phone_active:
+                mic_stat["phone"] += 1
             if not habibi_speaking and not self.ui.muted and not self._phone_active:
+                mic_stat["sent"] += 1
                 data = indata.tobytes()
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
@@ -1353,8 +1392,14 @@ class HabibiLive:
 
             with _mic_stream:
                 print("[HABIBI] 🎤 Mic stream open")
+                _last_stat = time.monotonic()
                 while True:
                     await asyncio.sleep(0.1)
+                    if time.monotonic() - _last_stat >= 10:
+                        _last_stat = time.monotonic()
+                        print("[MicStat] " + " ".join(f"{k}={v}" for k, v in mic_stat.items()))
+                        for k in mic_stat:
+                            mic_stat[k] = 0
         except Exception as e:
             print(f"[HABIBI] ❌ Mic: {e}")
             raise
