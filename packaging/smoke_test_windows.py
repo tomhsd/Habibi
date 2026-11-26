@@ -163,7 +163,7 @@ time.sleep(0.4)
 def _enter_ok():
     v = run("ui_control", action="read", window="Notepad")
     i, j = v.find("ENTER-A"), v.find("ENTER-B")
-    return (i >= 0 and j > i and ("\n" in v[i:j] or "\r" in v[i:j])), v[-200:]
+    return (i >= 0 and j > i and ("\n" in v[i:j] or "\r" in v[i:j])), repr(v[-200:])
 check("…Enter made new lines", _enter_ok)
 _st = sys.modules.get("plugins.screen_text")
 check("OCR slips still match ('Sumbit' finds 'Submit')", lambda: (bool(_st.find_text(

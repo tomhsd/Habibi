@@ -255,6 +255,13 @@ def _main_editable(win):
 
 def _value(el) -> str:
     """The text inside a field (not its label)."""
+    try:        # documents (Notepad, Word…): the text pattern keeps line breaks
+        if _info(el)[1] == "Document":
+            v = el.iface_text.DocumentRange.GetText(-1)
+            if v:
+                return str(v)
+    except Exception:
+        pass
     for getter in ("get_value",):
         try:
             v = getattr(el, getter)()
@@ -372,6 +379,32 @@ def _vision_point(win, what: str):
         return None
 
 
+def _focus_editable(win) -> None:
+    """If the keyboard focus isn't in a text box of this window, put it in the main one."""
+    try:
+        from pywinauto.uia_defines import IUIA
+        f = IUIA().get_focused_element()
+        if f.CurrentControlType in (50004, 50030):      # Edit, Document
+            return
+    except Exception:
+        pass
+    el = _main_editable(win)
+    if el is None:
+        return
+    try:
+        el.set_focus()
+    except Exception:
+        pass
+    if not _has_focus(el):
+        try:
+            el.click_input()
+            time.sleep(0.1)
+            from pywinauto.keyboard import send_keys
+            send_keys("^{END}")
+        except Exception:
+            pass
+
+
 def _press(win, keys: str) -> str:
     """Press keys (Enter, Tab, Esc, ctrl+s…) in THIS window, checked in front."""
     from core import target
@@ -388,6 +421,8 @@ def _press(win, keys: str) -> str:
     seq += names.get(last, ("{" + last.upper() + "}") if re.fullmatch(r"f\d{1,2}", last) else last)
     if not _bring_front(win):
         return f"Didn't press {keys}: '{win.window_text()}' wouldn't come to the front."
+    if last in ("enter", "return", "backspace", "delete", "space", "tab") and not seq.startswith(("^", "%")):
+        _focus_editable(win)       # the key belongs in the text box, not a menu or tab strip
     before = A.snapshot()
     try:
         target.require_front(win.handle)
@@ -446,6 +481,9 @@ def _type(win, text: str, field: str, clear: bool, enter: bool) -> str:
                     try:
                         if target.is_front(hwnd):
                             target_el.set_focus()
+                            if not _has_focus(target_el):
+                                target_el.click_input()
+                                time.sleep(0.1)
                             from pywinauto.keyboard import send_keys as _sk
                             target.require_front(hwnd)
                             _sk("^{END}")
