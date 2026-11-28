@@ -39,6 +39,9 @@ class PluginRecord:
     voice_wants: Optional[Callable] = None     # voice_takeover(host, failures) -> bool
     voice_session: Optional[Callable] = None   # async voice_session(host): runs until it hands back
     sleep_listener: Optional[Callable] = None  # sleep_listener(host) -> feed(frame) | None (wake words)
+    # optional phone remote hooks: see PluginRegistry.dashboard_setup
+    dashboard_setup: Optional[Callable] = None  # dashboard_setup(server, host): add routes to the phone dashboard
+    phone_script: Optional[Callable] = None     # phone_script() -> JavaScript added to the phone remote page
     mtime: float = 0.0
 
 
@@ -229,6 +232,31 @@ class PluginRegistry:
                 traceback.print_exc()
         return out
 
+    # -- called by main.py once the phone Remote Control server exists --
+    def dashboard_setup(self, server, host) -> None:
+        """For enabled plugins: call dashboard_setup(server, host) so a plugin can add
+        routes to the phone dashboard (server.app is the FastAPI app, and
+        server.is_authorized(request) checks the phone's login), and collect
+        phone_script() JavaScript, which the phone remote page loads from
+        /plugins.js. Never raises."""
+        for name, rec in self._plugins.items():
+            if not get_plugin_enabled(name):
+                continue
+            if rec.dashboard_setup is not None:
+                try:
+                    rec.dashboard_setup(server, host)
+                except Exception as e:
+                    self._logger(f"Plugin '{name}' dashboard_setup failed: {e}")
+                    traceback.print_exc()
+            if rec.phone_script is not None:
+                try:
+                    js = rec.phone_script()
+                    if isinstance(js, str) and js.strip():
+                        server.add_phone_script(name, js)
+                except Exception as e:
+                    self._logger(f"Plugin '{name}' phone_script failed: {e}")
+                    traceback.print_exc()
+
     # -- called by main.py before each Gemini connect: optional voice takeover --
     def voice_takeover(self, host, failures: int = 0) -> Optional[PluginRecord]:
         """Ask enabled plugins that declare BOTH voice_takeover(host, failures) and
@@ -353,10 +381,18 @@ def _validate(module, filename: str) -> PluginRecord:
     if not (callable(voice_wants) and inspect.iscoroutinefunction(voice_session)):
         voice_wants = voice_session = None
 
+    dash_setup = getattr(module, "dashboard_setup", None)
+    if not callable(dash_setup):
+        dash_setup = None
+    phone_js = getattr(module, "phone_script", None)
+    if not callable(phone_js):
+        phone_js = None
+
     return PluginRecord(name=name, description=description.strip(), parameters=parameters,
                          run=run_fn, file=filename, valid=True, error="", settings=settings,
                          ui_setup=ui_setup, voice_wants=voice_wants, voice_session=voice_session,
-                         sleep_listener=sleep_listener)
+                         sleep_listener=sleep_listener, dashboard_setup=dash_setup,
+                         phone_script=phone_js)
 
 
 def _load_file(path: Path, core_tool_names: set[str], valid: dict) -> PluginRecord:
