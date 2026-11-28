@@ -7,7 +7,7 @@ while Habibi sleeps, short bits of speech are written down on this PC with the
 same Whisper speech recognition offline mode uses, and if they contain "Habibi"
 Habibi wakes up. Nothing leaves the PC. "Hey Jarvis" keeps working too.
 
-Needs faster-whisper (in HabibiSetup.exe and the Python 3.12 copy). Uses the
+Needs faster-whisper (in both Windows installers and the Python 3.12 copy). Uses the
 core sleep_listener hook: the core hands this plugin the mic audio heard while
 asleep, and the plugin calls host.wake().
 """
@@ -172,7 +172,7 @@ def sleep_listener(host):
     if not _can_listen():
         try:
             host.ui.write_log("SYS: 'Hey Habibi' needs the offline speech recognition "
-                              "(Python 3.12 copy or HabibiSetup.exe). 'Hey Jarvis' still works.")
+                              "(Python 3.12 copy or the Windows installer). 'Hey Jarvis' still works.")
         except Exception:
             pass
         return None

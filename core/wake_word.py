@@ -108,7 +108,7 @@ def install_and_download(logger: Callable[[str], None] = print) -> tuple[bool, s
                 if sys.version_info >= (3, 14):
                     v = f"{sys.version_info.major}.{sys.version_info.minor}"
                     return False, (f"the wake word engine (onnxruntime) does not support Python {v} yet. "
-                                   "Run Habibi with Python 3.12, or install HabibiSetup.exe, "
+                                   "Run Habibi with Python 3.12, or install HabibiOnlineSetup.exe / HabibiOfflineSetup.exe, "
                                    "which already includes the wake word.")
                 tail = (r.stderr or r.stdout or "").strip().splitlines()[-1:] or [""]
                 return False, f"pip install failed: {tail[0][:160]}"

@@ -1,7 +1,8 @@
 name: Build Habibi
 
 # Every push to main builds:
-#   • HabibiSetup.exe + Habibi-Windows-portable.zip  (Windows)
+#   • HabibiOnlineSetup.exe  + Habibi-Online-Windows-portable.zip   (Windows, Gemini Live only)
+#   • HabibiOfflineSetup.exe + Habibi-Offline-Windows-portable.zip  (Windows, plus offline mode)
 #   • Habibi.apk                                     (Android phone app)
 # and publishes them on the "Latest build" release page.
 # Pushing a tag like v1.0.0 makes a versioned release instead.
@@ -84,17 +85,29 @@ jobs:
         continue-on-error: true
         run: python examples/screen_control_demo.py
 
-      - name: Build Habibi.exe
-        run: python packaging/build_exe.py
+      - name: Build Habibi.exe (Online and Offline editions)
+        run: |
+          python packaging/build_exe.py --edition online
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python packaging/build_exe.py --edition offline
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Check the media player is inside the .exe build
+      - name: Check both editions (media player inside, offline mode only in Offline)
         shell: pwsh
         run: |
-          $m = Get-ChildItem dist/Habibi -Recurse -Include "*Multimedia*.dll","*ffmpeg*.dll","*windowsmediaplugin*.dll" | Select-Object -ExpandProperty Name
-          $m
-          if (-not ($m -match "Qt6Multimedia")) { Write-Error "Qt Multimedia missing from the build" }
+          foreach ($e in "Online", "Offline") {
+            $app = "dist/$e/Habibi"
+            if (-not (Test-Path "$app/Habibi.exe")) { Write-Error "$e`: Habibi.exe missing"; exit 1 }
+            $m = Get-ChildItem $app -Recurse -Include "*Multimedia*.dll" | Select-Object -ExpandProperty Name
+            if (-not ($m -match "Qt6Multimedia")) { Write-Error "$e`: Qt Multimedia missing from the build"; exit 1 }
+            $off = Test-Path "$app/plugins/offline_mode.py"
+            $piper = [bool](Get-ChildItem $app -Recurse -Directory -Filter "piper" -ErrorAction SilentlyContinue)
+            "$e edition: offline_mode=$off piper=$piper plugins=$((Get-ChildItem "$app/plugins" -Filter *.py).Count)"
+            if ($e -eq "Online"  -and ($off -or $piper)) { Write-Error "Online edition must not contain offline mode"; exit 1 }
+            if ($e -eq "Offline" -and -not $off)        { Write-Error "Offline edition is missing offline mode"; exit 1 }
+          }
 
-      - name: Build installer (HabibiSetup.exe)
+      - name: Build installers (HabibiOnlineSetup.exe, HabibiOfflineSetup.exe)
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
@@ -102,15 +115,20 @@ jobs:
           $ver = "${{ github.ref_name }}"
           if ("${{ github.ref_type }}" -ne "tag") { $ver = "1.0.${{ github.run_number }}" }
           $env:HABIBI_VERSION = $ver.TrimStart("v")
-          & $iscc packaging\installer.iss
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($e in "Online", "Offline") {
+            $env:HABIBI_EDITION = $e
+            & $iscc packaging\installer.iss
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - uses: actions/upload-artifact@v4
         with:
           name: Habibi-Windows
           path: |
-            dist/HabibiSetup.exe
-            dist/Habibi-Windows-portable.zip
+            dist/HabibiOnlineSetup.exe
+            dist/HabibiOfflineSetup.exe
+            dist/Habibi-Online-Windows-portable.zip
+            dist/Habibi-Offline-Windows-portable.zip
 
   android:
     name: Android (.apk)
@@ -178,4 +196,4 @@ jobs:
           gh release create latest out/* --repo "${{ github.repository }}" \
             --target "${{ github.sha }}" --prerelease \
             --title "Latest build" \
-            --notes "Automatic build of commit ${{ github.sha }}. Windows: HabibiSetup.exe (installer) or Habibi-Windows-portable.zip. Android: Habibi.apk."
+            --notes "Automatic build of commit ${{ github.sha }}. Windows, two separate editions: HabibiOnlineSetup.exe (Gemini Live, needs internet) or HabibiOfflineSetup.exe (also works without internet: local voice + Ollama). Portable zips of each. Android: Habibi.apk."
